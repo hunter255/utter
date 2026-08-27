@@ -245,12 +245,18 @@ export interface HistoryEntry {
   app: string | null
 }
 
-/** `crates/utter-inject/src/hotkey.rs::PermissionReport` */
-export interface PermissionReport {
-  input_group: boolean
-  uinput_writable: boolean
-  fix_command: string
-}
+/** `src-tauri/src/permissions.rs::PermissionReport` */
+export type PermissionReport =
+  | {
+      platform: 'linux'
+      input_group: boolean
+      uinput_writable: boolean
+      fix_command: string
+    }
+  | {
+      platform: 'unsupported'
+      os: string
+    }
 
 /** Payload of the `model-progress` event (`src-tauri/src/events.rs::ModelProgress`). */
 export interface ModelProgressPayload {

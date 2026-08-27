@@ -3,7 +3,7 @@
 //! them.
 //!
 //! This module only builds on Linux; non-Linux targets never reference it
-//! (see `create_source` and `check_permissions` in `crate::hotkey`).
+//! (see `create_source` and `check_linux_permissions` in `crate::hotkey`).
 
 use std::collections::HashMap;
 use std::str::FromStr;

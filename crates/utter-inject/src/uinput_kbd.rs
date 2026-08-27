@@ -180,7 +180,7 @@ mod linux_impl {
         /// Creates and registers a new virtual keyboard. Fails if
         /// `/dev/uinput` cannot be opened or the device cannot be created
         /// (typically a permissions problem; see
-        /// [`crate::hotkey::check_permissions`]).
+        /// [`crate::hotkey::check_linux_permissions`]).
         pub fn new() -> Result<Self, InjectError> {
             let device = VirtualDevice::builder()
                 .map_err(|e| InjectError::Backend(format!("/dev/uinput unavailable: {e}")))?

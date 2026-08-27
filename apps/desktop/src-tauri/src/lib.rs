@@ -7,6 +7,7 @@ mod commands;
 pub mod events;
 #[cfg(target_os = "macos")]
 mod macos_hotkeys;
+mod permissions;
 /// Maps each language profile's hotkey binding to its own lazily-built
 /// engines; wired into the runtime worker in `runtime`. Public so
 /// integration tests can build a `ProfileRegistry` over a fake

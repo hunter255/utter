@@ -55,4 +55,5 @@ default = []
 sherpa = ["utter-stt/sherpa"]
 
 [dev-dependencies]
+serde_json = { workspace = true }
 tempfile = "3"
