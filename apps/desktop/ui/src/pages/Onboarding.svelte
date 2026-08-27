@@ -4,21 +4,35 @@
 
   import HotkeyPicker from '../lib/components/HotkeyPicker.svelte'
   import * as api from '../lib/api'
+  import { hasBaseKey, parseChordTokens } from '../lib/hotkey'
   import { settingsStore } from '../lib/stores'
-  import type { ModelInfo, PermissionKind, PermissionReport, PermissionStatus } from '../lib/types'
+  import type {
+    ModelInfo,
+    PermissionKind,
+    PermissionReport,
+    PermissionStatus,
+    PlatformCapabilities,
+  } from '../lib/types'
 
   interface Props {
     onDone: () => void
+    capabilities: PlatformCapabilities
   }
 
-  let { onDone }: Props = $props()
+  let { onDone, capabilities }: Props = $props()
 
   let settings = $derived($settingsStore!)
+  let requiresBaseKey = $derived(!capabilities.modifier_only_hotkeys)
+  let hotkeyValid = $derived.by(() => {
+    const hotkey = settings.profiles[0]?.hotkey ?? ''
+    return parseChordTokens(hotkey) !== null && (!requiresBaseKey || hasBaseKey(hotkey))
+  })
 
   const STEPS = ['Welcome', 'Microphone', 'Model', 'Hotkey', 'Permissions', 'Done'] as const
   let step = $state(0)
 
   function next() {
+    if (step === 3 && !hotkeyValid) return
     if (step < STEPS.length - 1) step += 1
   }
   function back() {
@@ -279,6 +293,7 @@
       <h1>Hotkey</h1>
       <p class="muted">Pick the key combination that starts/stops dictation.</p>
       <HotkeyPicker
+        requireBaseKey={requiresBaseKey}
         bind:value={
           () => settings.profiles[0].hotkey,
           (v) =>
@@ -287,6 +302,13 @@
             })
         }
       />
+      {#if !hotkeyValid}
+        <p class="warn">
+          {requiresBaseKey
+            ? 'macOS needs at least one regular key. Try ctrl+alt+space.'
+            : 'Choose a hotkey before continuing.'}
+        </p>
+      {/if}
     {:else if step === 4}
       <h1>Permissions</h1>
       {#if permissionsError}
@@ -378,7 +400,9 @@
       <div class="spacer"></div>
       {#if step < STEPS.length - 1}
         <button type="button" class="ghost" onclick={onDone}>Skip setup</button>
-        <button type="button" class="primary" onclick={next}>Continue</button>
+        <button type="button" class="primary" onclick={next} disabled={step === 3 && !hotkeyValid}>
+          Continue
+        </button>
       {:else}
         <button type="button" class="primary" onclick={onDone}>Finish</button>
       {/if}

@@ -26,6 +26,7 @@ import type {
   NoticePayload,
   PermissionReport,
   PermissionKind,
+  PlatformCapabilities,
   Settings,
 } from './types'
 
@@ -79,6 +80,10 @@ export function permissionsReport(): Promise<PermissionReport> {
 
 export function requestPermission(kind: PermissionKind): Promise<PermissionReport> {
   return invoke('request_permission', { kind })
+}
+
+export function platformCapabilities(): Promise<PlatformCapabilities> {
+  return invoke('platform_capabilities')
 }
 
 export function testRefine(sample: string): Promise<string> {

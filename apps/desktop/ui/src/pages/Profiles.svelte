@@ -8,14 +8,27 @@
   import Toggle from '../lib/components/Toggle.svelte'
   import HotkeyPicker from '../lib/components/HotkeyPicker.svelte'
   import * as api from '../lib/api'
-  import { chordsConflict, parseChordTokens } from '../lib/hotkey'
+  import { chordsConflict, hasBaseKey, parseChordTokens } from '../lib/hotkey'
   import { previewModelOptions } from '../lib/models'
   import { mergeDeep, settingsStore, type DeepPartial } from '../lib/stores'
-  import type { EngineKind, LanguageProfile, ModelInfo, Tone } from '../lib/types'
+  import type {
+    EngineKind,
+    LanguageProfile,
+    ModelInfo,
+    PlatformCapabilities,
+    Tone,
+  } from '../lib/types'
+
+  interface Props {
+    capabilities: PlatformCapabilities
+  }
+
+  let { capabilities }: Props = $props()
 
   // App.svelte only mounts pages once `$settingsStore` has finished loading,
   // so this non-null assertion is safe for the component's whole lifetime.
   let settings = $derived($settingsStore!)
+  let requiresBaseKey = $derived(!capabilities.modifier_only_hotkeys)
 
   const ENGINE_OPTIONS: { value: EngineKind; label: string }[] = [
     { value: 'whisper', label: 'Whisper (local)' },
@@ -58,7 +71,17 @@
   // too (see `parseChordTokens`), so it takes part in no conflict here
   // either, mirroring `parse_profile_hotkeys` dropping such a profile from
   // hotkey registration instead of reporting a conflict for it.
-  let parsedHotkeys = $derived(settings.profiles.map((p) => parseChordTokens(p.hotkey)))
+  let invalidHotkeys = $derived(
+    settings.profiles.map((profile) => {
+      const parsed = parseChordTokens(profile.hotkey)
+      return parsed === null || (requiresBaseKey && !hasBaseKey(profile.hotkey))
+    }),
+  )
+  let parsedHotkeys = $derived(
+    settings.profiles.map((profile, index) =>
+      invalidHotkeys[index] ? null : parseChordTokens(profile.hotkey),
+    ),
+  )
 
   // Maps a profile's index to the ids of every other profile whose chord
   // conflicts with it, using `chordsConflict` — a deliberately close mirror
@@ -161,15 +184,25 @@
     <Field
       label="Hotkey"
       for="profile-{index}-hotkey"
-      hint="Modifiers plus one key, e.g. ctrl+alt+d, or modifiers alone."
+      hint={requiresBaseKey
+        ? 'macOS requires modifiers plus one regular key, e.g. ctrl+alt+space.'
+        : 'Modifiers plus one key, e.g. ctrl+alt+d, or modifiers alone.'}
     >
       <HotkeyPicker
         id="profile-{index}-hotkey"
+        requireBaseKey={requiresBaseKey}
         bind:value={
           () => profile.hotkey,
           (v) => updateProfile(index, { hotkey: v })
         }
       />
+      {#if invalidHotkeys[index]}
+        <p class="warning">
+          {requiresBaseKey
+            ? 'This hotkey cannot be registered on macOS; add a letter, number, function key, or Space.'
+            : 'Choose a valid hotkey for this profile.'}
+        </p>
+      {/if}
       {#if conflictsByIndex.has(index)}
         <p class="warning">
           Conflicts with {conflictsByIndex.get(index)?.join(', ')} — one key press could fire

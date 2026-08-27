@@ -6,8 +6,9 @@
 // the Rust parser also accepts `control` and `meta`/`win` as aliases for
 // `ctrl`/`super`, but this picker only ever emits the canonical short forms)
 // or a single letter/digit/`f1`..`f24`/`space` base key. A chord made
-// entirely of modifiers (e.g. the default `ctrl+super`) is valid and
-// accepted here too.
+// entirely of modifiers (e.g. the default `ctrl+super`) is valid on Linux,
+// while callers can require a base key on platforms whose global-shortcut
+// API cannot register modifier-only chords.
 
 export const MODIFIER_ORDER = ['ctrl', 'alt', 'shift', 'super'] as const
 export type ModifierToken = (typeof MODIFIER_ORDER)[number]
@@ -105,6 +106,12 @@ export function parseChordTokens(chord: string): Set<string> | null {
     .map((token) => token.trim().toLowerCase())
     .filter((token) => token.length > 0)
   return tokens.length > 0 ? new Set(tokens) : null
+}
+
+/** Whether a stored chord contains the one non-modifier key macOS requires. */
+export function hasBaseKey(chord: string): boolean {
+  const tokens = parseChordTokens(chord)
+  return tokens !== null && [...tokens].some((token) => !isModifierToken(token))
 }
 
 /** True when two chords could complete on the same key-down event, mirroring

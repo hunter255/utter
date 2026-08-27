@@ -8,6 +8,7 @@ pub mod events;
 #[cfg(target_os = "macos")]
 mod macos_hotkeys;
 mod permissions;
+mod platform;
 /// Maps each language profile's hotkey binding to its own lazily-built
 /// engines; wired into the runtime worker in `runtime`. Public so
 /// integration tests can build a `ProfileRegistry` over a fake
@@ -151,6 +152,7 @@ pub fn run() -> Result<(), String> {
             commands::has_api_key,
             commands::permissions_report,
             commands::request_permission,
+            commands::platform_capabilities,
             commands::test_refine,
             commands::cancel_dictation,
             commands::take_pending_notices,

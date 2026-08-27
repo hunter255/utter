@@ -4,15 +4,16 @@
   // there, including the shift+digit case); this component only owns the
   // capture gesture (which keys are currently down, when to finalize).
 
-  import { formatCombo, isModifierToken, tokenFor } from '../hotkey'
+  import { formatCombo, hasBaseKey, isModifierToken, tokenFor } from '../hotkey'
 
   interface Props {
     value?: string
     id?: string
     disabled?: boolean
+    requireBaseKey?: boolean
   }
 
-  let { value = $bindable(''), id, disabled = false }: Props = $props()
+  let { value = $bindable(''), id, disabled = false, requireBaseKey = false }: Props = $props()
 
   let capturing = $state(false)
   let preview = $state('')
@@ -36,7 +37,16 @@
 
   function stop(commit: boolean) {
     if (commit && combo.size > 0) {
-      value = formatCombo(combo)
+      const candidate = formatCombo(combo)
+      if (requireBaseKey && !hasBaseKey(candidate)) {
+        capturing = false
+        preview = ''
+        hint = 'Add a letter, number, function key, or Space'
+        down = new Set()
+        combo = new Set()
+        return
+      }
+      value = candidate
     }
     capturing = false
     preview = ''
@@ -57,8 +67,8 @@
     const token = tokenFor(event.code, event.key)
     if (!token) return
 
-    const hasBaseKey = [...combo].some((t) => !isModifierToken(t))
-    if (!isModifierToken(token) && hasBaseKey && !combo.has(token)) {
+    const comboHasBaseKey = [...combo].some((t) => !isModifierToken(t))
+    if (!isModifierToken(token) && comboHasBaseKey && !combo.has(token)) {
       hint = 'A hotkey may only have one base key'
       return
     }
