@@ -308,10 +308,6 @@ mod stub_impl {
             ))
         }
 
-        pub fn paste(&mut self) -> Result<(), InjectError> {
-            match *self {}
-        }
-
         pub fn type_text(&mut self, _text: &str) -> Result<(), InjectError> {
             match *self {}
         }

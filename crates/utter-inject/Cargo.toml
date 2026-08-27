@@ -14,3 +14,6 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 utter-core = { path = "../utter-core" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-core-graphics = { version = "0.3", default-features = false, features = ["CGEvent", "CGEventSource", "CGEventTypes", "CGRemoteOperation"] }

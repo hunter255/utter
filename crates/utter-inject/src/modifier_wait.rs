@@ -12,17 +12,17 @@
 //! though the injector reports success. Waiting for a clean modifier state
 //! first avoids that race.
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 use std::time::{Duration, Instant};
 
 /// Upper bound on how long to wait for modifiers to clear before giving up
 /// and synthesizing the paste anyway: better a possible race than an
 /// indefinite hang if a modifier is stuck down for some unrelated reason.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) const RELEASE_TIMEOUT: Duration = Duration::from_millis(1000);
 
 /// How often to re-sample modifier state while waiting.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) const POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 /// Blocks the calling thread, calling `probe` every `poll_interval`, until
@@ -32,7 +32,7 @@ pub(crate) const POLL_INTERVAL: Duration = Duration::from_millis(20);
 ///
 /// Pulled out of the live evdev polling below so the retry/timeout logic
 /// itself is unit-testable without any device or real waiting.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 pub(crate) fn wait_for_clear_with(
     timeout: Duration,
     poll_interval: Duration,
@@ -100,12 +100,48 @@ mod linux_impl {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+mod macos_impl {
+    use super::{wait_for_clear_with, POLL_INTERVAL, RELEASE_TIMEOUT};
+    use objc2_core_graphics::{CGEventFlags, CGEventSource, CGEventSourceStateID};
+
+    const MODIFIER_FLAGS: CGEventFlags = CGEventFlags::from_bits_retain(
+        CGEventFlags::MaskControl.bits()
+            | CGEventFlags::MaskAlternate.bits()
+            | CGEventFlags::MaskShift.bits()
+            | CGEventFlags::MaskCommand.bits(),
+    );
+
+    fn any_modifier_down(flags: CGEventFlags) -> bool {
+        flags.intersects(MODIFIER_FLAGS)
+    }
+
+    pub(crate) fn wait_for_modifiers_released() -> bool {
+        wait_for_clear_with(RELEASE_TIMEOUT, POLL_INTERVAL, || {
+            any_modifier_down(CGEventSource::flags_state(
+                CGEventSourceStateID::CombinedSessionState,
+            ))
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn only_real_modifier_flags_block_paste() {
+            assert!(any_modifier_down(CGEventFlags::MaskCommand));
+            assert!(any_modifier_down(CGEventFlags::MaskAlternate));
+            assert!(!any_modifier_down(CGEventFlags::MaskNumericPad));
+            assert!(!any_modifier_down(CGEventFlags::empty()));
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 mod stub_impl {
-    /// No evdev backend exists off Linux; `ClipboardPasteInjector::inject`
-    /// can never actually run there either (see `crate::uinput_kbd`'s
-    /// uninhabited stub), so this only needs to make the call site
-    /// `cfg`-free, not do anything meaningful.
+    /// No paste-key backend exists on this platform, so this only keeps the
+    /// injection call site cfg-free.
     pub(crate) fn wait_for_modifiers_released() -> bool {
         true
     }
@@ -113,7 +149,9 @@ mod stub_impl {
 
 #[cfg(target_os = "linux")]
 pub(crate) use linux_impl::wait_for_modifiers_released;
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+pub(crate) use macos_impl::wait_for_modifiers_released;
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub(crate) use stub_impl::wait_for_modifiers_released;
 
 #[cfg(test)]

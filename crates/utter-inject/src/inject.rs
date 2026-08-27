@@ -2,11 +2,10 @@
 //! clipboard-only as the universal last resort.
 //!
 //! Each backend implements [`utter_core::TextInjector`]. Constructing
-//! [`ClipboardPasteInjector`] or [`TypeInjector`] can fail with
-//! [`InjectError::NoBackend`] where the platform lacks a uinput virtual
-//! keyboard (i.e. anywhere but Linux); callers should compose only the
-//! backends that constructed successfully, typically via
-//! [`crate::chain::ChainInjector`].
+//! [`ClipboardPasteInjector`] can fail where no paste-key backend or required
+//! OS permission is available; [`TypeInjector`] still requires Linux uinput.
+//! Callers should compose only the backends that constructed successfully,
+//! typically via [`crate::chain::ChainInjector`].
 
 use std::time::Duration;
 
@@ -14,6 +13,7 @@ use utter_core::{InjectError, InjectionMethod, TextInjector};
 
 use crate::clipboard;
 use crate::modifier_wait;
+use crate::paste_key::PasteKey;
 use crate::uinput_kbd::VirtualKeyboard;
 
 /// How long to wait after setting the clipboard before synthesizing the
@@ -32,24 +32,23 @@ const CLIPBOARD_RESTORE_DELAY: Duration = Duration::from_millis(150);
 
 /// Injects text by publishing it to the clipboard and synthesizing a paste.
 ///
-/// The text goes to both the CLIPBOARD and PRIMARY selections, because the
-/// paste chord is Shift+Insert and which selection that reads depends on the
-/// receiving toolkit — see [`crate::uinput_kbd`] for why it cannot be Ctrl+V.
-/// The previous contents of both are saved before the paste and restored
-/// afterward on a best-effort basis: a failed restore is logged (see
+/// On Linux the text goes to both CLIPBOARD and PRIMARY because Shift+Insert
+/// reads different selections in different toolkits. macOS has one clipboard
+/// and uses Command+V. Previous text contents are restored afterward on a
+/// best-effort basis: a failed restore is logged (see
 /// [`crate::clipboard::Selections::restore`]) but never turns a successful injection into
 /// an error.
 pub struct ClipboardPasteInjector {
-    keyboard: VirtualKeyboard,
+    paste_key: PasteKey,
     selections: clipboard::Selections,
 }
 
 impl ClipboardPasteInjector {
-    /// Creates a new injector, failing if no uinput virtual keyboard backend
-    /// is available on this platform.
+    /// Creates a new injector, failing if the platform has no paste-key
+    /// backend or macOS event-posting permission has not been granted.
     pub fn new() -> Result<Self, InjectError> {
         Ok(Self {
-            keyboard: VirtualKeyboard::new()?,
+            paste_key: PasteKey::new()?,
             selections: clipboard::Selections::new(),
         })
     }
@@ -67,7 +66,7 @@ impl TextInjector for ClipboardPasteInjector {
         // combination (see `crate::modifier_wait`).
         modifier_wait::wait_for_modifiers_released();
 
-        let paste_result = self.keyboard.paste();
+        let paste_result = self.paste_key.paste();
         std::thread::sleep(CLIPBOARD_RESTORE_DELAY);
         self.selections.restore(previous);
 
@@ -160,6 +159,15 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn direct_typing_remains_unavailable_on_macos() {
+        assert!(matches!(
+            TypeInjector::new(),
+            Err(InjectError::NoBackend(_))
+        ));
+    }
+
     /// Manual, hardware-touching verification: requires a real focused text
     /// editor window and the process to have both `input`-group and
     /// `/dev/uinput` permissions (see `crate::hotkey::check_permissions`).
@@ -175,6 +183,20 @@ mod tests {
         let mut injector = ClipboardPasteInjector::new().expect("uinput backend available");
         let method = injector
             .inject("utter-inject manual test: clipboard-paste\n")
+            .expect("injection should succeed with a focused text field");
+        assert_eq!(method, InjectionMethod::ClipboardPaste);
+    }
+
+    /// Manual macOS verification: grant Utter permission to control the
+    /// computer, focus a text field, then run this ignored test and confirm
+    /// the Unicode payload appears and the previous clipboard text returns.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore]
+    fn injects_unicode_into_focused_macos_window() {
+        let mut injector = ClipboardPasteInjector::new().expect("post-event permission granted");
+        let method = injector
+            .inject("Utter macOS test: Привет 👋\n")
             .expect("injection should succeed with a focused text field");
         assert_eq!(method, InjectionMethod::ClipboardPaste);
     }
