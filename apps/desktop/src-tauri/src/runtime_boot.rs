@@ -17,19 +17,24 @@
 //! engines/injectors, spawning threads) are thin wrappers around them.
 
 use std::sync::Arc;
+#[cfg(target_os = "linux")]
 use std::thread;
 use std::time::Duration;
 
-use crossbeam_channel::{unbounded, Receiver};
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+use crossbeam_channel::unbounded;
+use crossbeam_channel::Receiver;
 use tauri::{AppHandle, Manager};
 
 use utter_core::{
     InjectError, InjectionMethod, SttEngine, SttError, TextInjector, TextRefiner,
     TranscribeOptions, Transcript,
 };
+#[cfg(target_os = "linux")]
+use utter_inject::create_source;
 use utter_inject::{
-    create_source, injection_order, parse_hotkey, ChainInjector, ClipboardOnlyInjector,
-    ClipboardPasteInjector, HotkeyEvent, HotkeySpec, TypeInjector,
+    injection_order, parse_hotkey, ChainInjector, ClipboardOnlyInjector, ClipboardPasteInjector,
+    HotkeyEvent, HotkeySpec, TypeInjector,
 };
 use utter_refine::{LlmConfig, LlmRefiner};
 use utter_store::settings::{CloudSttCfg, EngineCfg, EngineKind, InjectionPreference, RefineCfg};
@@ -63,7 +68,7 @@ pub fn boot(app: &AppHandle) -> Result<(), String> {
         .clone();
 
     let history = open_history(&settings)?;
-    let (deps, mut notices) = build_deps(&settings, &state.models, history);
+    let (deps, mut notices) = build_deps(app, &state, &settings, &state.models, history);
     // A config that failed to migrate on load (see `AppState::new`) is a
     // one-time startup condition, not a per-boot degradation like the ones
     // `build_deps` reports, so it is queued here rather than threaded
@@ -120,7 +125,7 @@ fn report_boot_notices(sink: &dyn EventSink, parked: &PendingNotices, notices: V
 /// through to reach the live runtime.
 pub fn rebuild(app: &AppHandle, state: &AppState, settings: &Settings) -> Result<(), String> {
     let history = open_history(settings)?;
-    let (deps, notices) = build_deps(settings, &state.models, history);
+    let (deps, notices) = build_deps(app, state, settings, &state.models, history);
     let sink = Arc::new(TauriEventSink::new(app.clone()));
 
     {
@@ -180,6 +185,8 @@ pub(crate) type QueuedNotice = (&'static str, String);
 /// built here lazily loads engines for the runtime worker's whole lifetime, long after this
 /// function returns — it needs an owned handle, not one borrowed from this call's stack frame.
 fn build_deps(
+    app: &AppHandle,
+    state: &AppState,
     settings: &Settings,
     models: &Arc<ModelManager>,
     history: Option<HistoryHandle>,
@@ -189,7 +196,11 @@ fn build_deps(
     let (specs, kept_profiles, hotkey_notices) = parse_profile_hotkeys(settings.profiles.clone());
     notices.extend(hotkey_notices);
 
-    let (hotkey_rx, hotkey_notice) = spawn_hotkey_sources(&specs);
+    let profile_ids = kept_profiles
+        .iter()
+        .map(|profile| profile.id.clone())
+        .collect::<Vec<_>>();
+    let (hotkey_rx, hotkey_notice) = spawn_hotkey_sources(app, state, &specs, &profile_ids);
     if let Some(msg) = hotkey_notice {
         notices.push(("warning", msg));
     }
@@ -744,8 +755,14 @@ fn build_injector(preference: InjectionPreference) -> Box<dyn TextInjector> {
 /// as immediately "ready" with a disconnect error, spinning the worker
 /// thread at 100% CPU forever. One leaked `Sender` per failed (re)boot is an
 /// intentionally rare, negligible cost next to that.
-fn spawn_hotkey_sources(specs: &[HotkeySpec]) -> (Receiver<HotkeyEvent>, Option<String>) {
-    let (tx, rx) = unbounded::<HotkeyEvent>();
+#[cfg(target_os = "linux")]
+fn spawn_hotkey_sources(
+    _app: &AppHandle,
+    _state: &AppState,
+    specs: &[HotkeySpec],
+    _profile_ids: &[String],
+) -> (Receiver<HotkeyEvent>, Option<String>) {
+    let (tx, rx) = crossbeam_channel::unbounded::<HotkeyEvent>();
 
     let source = match create_source(specs) {
         Ok(source) => source,
@@ -780,6 +797,31 @@ fn spawn_hotkey_sources(specs: &[HotkeySpec]) -> (Receiver<HotkeyEvent>, Option<
             )
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+fn spawn_hotkey_sources(
+    app: &AppHandle,
+    state: &AppState,
+    specs: &[HotkeySpec],
+    profile_ids: &[String],
+) -> (Receiver<HotkeyEvent>, Option<String>) {
+    state.macos_hotkeys.replace(app, specs, profile_ids)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn spawn_hotkey_sources(
+    _app: &AppHandle,
+    _state: &AppState,
+    _specs: &[HotkeySpec],
+    _profile_ids: &[String],
+) -> (Receiver<HotkeyEvent>, Option<String>) {
+    let (tx, rx) = unbounded();
+    std::mem::forget(tx);
+    (
+        rx,
+        Some("hotkey capture is not implemented on this platform yet".to_string()),
+    )
 }
 
 #[cfg(test)]

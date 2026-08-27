@@ -5,6 +5,8 @@
 mod commands;
 /// Event payload shapes shared with the frontend.
 pub mod events;
+#[cfg(target_os = "macos")]
+mod macos_hotkeys;
 /// Maps each language profile's hotkey binding to its own lazily-built
 /// engines; wired into the runtime worker in `runtime`. Public so
 /// integration tests can build a `ProfileRegistry` over a fake
@@ -81,8 +83,11 @@ fn init_tracing(setting: &str) {
 /// panic.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() -> Result<(), String> {
-    let app = tauri::Builder::default()
-        .plugin(tauri_plugin_notification::init())
+    let builder = tauri::Builder::default().plugin(tauri_plugin_notification::init());
+    #[cfg(target_os = "macos")]
+    let builder = builder.plugin(macos_hotkeys::plugin());
+
+    let app = builder
         .setup(|app| {
             let state = AppState::new().map_err(|e| e.to_string())?;
             // As early as settings are available, and before `boot` — every

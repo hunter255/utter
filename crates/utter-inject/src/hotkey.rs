@@ -162,6 +162,51 @@ impl HotkeySpec {
     pub fn is_modifier_only(&self) -> bool {
         !self.tokens.is_empty() && self.tokens.iter().all(|t| t.is_modifier())
     }
+
+    /// Returns a deterministic, parser-compatible representation of this
+    /// chord for desktop shortcut APIs that require one non-modifier key.
+    ///
+    /// Modifiers are always emitted in control/alt/shift/super order and the
+    /// base key uses the physical [`global_hotkey`] naming convention. The
+    /// result is deliberately platform-neutral: on macOS `super` maps to
+    /// Command, while the persisted settings grammar remains unchanged.
+    pub fn canonical_shortcut(&self) -> Result<String, HotkeyShortcutError> {
+        let mut parts = Vec::with_capacity(self.tokens.len());
+        for (key, name) in [
+            (Key::Ctrl, "control"),
+            (Key::Alt, "alt"),
+            (Key::Shift, "shift"),
+            (Key::Super, "super"),
+        ] {
+            if self.tokens.contains(&key) {
+                parts.push(name.to_string());
+            }
+        }
+
+        let base = self
+            .tokens
+            .iter()
+            .find(|key| !key.is_modifier())
+            .ok_or(HotkeyShortcutError::ModifierOnly)?;
+        parts.push(match base {
+            Key::Char(c) if c.is_ascii_digit() => format!("Digit{c}"),
+            Key::Char(c) => format!("Key{}", c.to_ascii_uppercase()),
+            Key::Function(n) => format!("F{n}"),
+            Key::Space => "Space".to_string(),
+            Key::Ctrl | Key::Alt | Key::Shift | Key::Super => unreachable!(),
+        });
+
+        Ok(parts.join("+"))
+    }
+}
+
+/// A valid Utter chord that cannot be represented by desktop global
+/// shortcut APIs.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum HotkeyShortcutError {
+    /// The platform API requires a normal base key in addition to modifiers.
+    #[error("modifier-only hotkeys are not supported on this platform; add a letter, digit, function key, or Space")]
+    ModifierOnly,
 }
 
 /// An error parsing a hotkey chord specification.
@@ -556,6 +601,42 @@ mod tests {
         let spec = parse_hotkey("ctrl+space").expect("should parse");
         assert!(!spec.is_modifier_only());
         assert_eq!(spec.tokens, HashSet::from([Key::Ctrl, Key::Space]));
+    }
+
+    #[test]
+    fn canonical_shortcut_has_stable_modifier_and_key_order() {
+        let spec = parse_hotkey("meta+shift+control+alt+d").expect("valid chord");
+        assert_eq!(
+            spec.canonical_shortcut().expect("representable"),
+            "control+alt+shift+super+KeyD"
+        );
+
+        assert_eq!(
+            parse_hotkey("ctrl+5")
+                .unwrap()
+                .canonical_shortcut()
+                .unwrap(),
+            "control+Digit5"
+        );
+        assert_eq!(
+            parse_hotkey("f12").unwrap().canonical_shortcut().unwrap(),
+            "F12"
+        );
+        assert_eq!(
+            parse_hotkey("super+space")
+                .unwrap()
+                .canonical_shortcut()
+                .unwrap(),
+            "super+Space"
+        );
+    }
+
+    #[test]
+    fn canonical_shortcut_rejects_modifier_only_chords() {
+        assert_eq!(
+            parse_hotkey("ctrl+super").unwrap().canonical_shortcut(),
+            Err(HotkeyShortcutError::ModifierOnly)
+        );
     }
 
     #[test]
