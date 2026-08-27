@@ -3,6 +3,10 @@ use thiserror::Error;
 /// Errors that can occur while capturing or enumerating microphone audio.
 #[derive(Debug, Clone, PartialEq, Error)]
 pub enum AudioError {
+    /// The process is not authorized to capture microphone audio.
+    #[error("microphone permission is not granted")]
+    PermissionDenied,
+
     /// No default input device is available on this host.
     #[error("no default input device available")]
     NoDefaultDevice,

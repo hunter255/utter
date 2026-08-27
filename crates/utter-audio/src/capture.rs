@@ -13,6 +13,14 @@ use crate::error::AudioError;
 use crate::resample::Resampler;
 use crate::AudioFrame;
 
+#[cfg(target_os = "macos")]
+fn ensure_microphone_permission(status: crate::MicrophonePermission) -> Result<(), AudioError> {
+    match status {
+        crate::MicrophonePermission::Granted => Ok(()),
+        _ => Err(AudioError::PermissionDenied),
+    }
+}
+
 /// Number of mono 16 kHz samples per emitted [`AudioFrame`] (~100 ms).
 const FRAME_SAMPLES: usize = (SAMPLE_RATE as usize) / 10;
 
@@ -99,6 +107,9 @@ impl Capture {
     /// [`stop`](Capture::stop) is called or `tx`'s receiver is dropped (in
     /// which case frames are silently discarded rather than panicking).
     pub fn start(device: Option<&str>, tx: Sender<AudioFrame>) -> Result<Capture, AudioError> {
+        #[cfg(target_os = "macos")]
+        ensure_microphone_permission(crate::microphone_permission())?;
+
         let host = cpal::default_host();
 
         let device = match device {
@@ -208,6 +219,23 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn denied_microphone_fails_before_audio_hardware_is_opened() {
+        assert_eq!(
+            ensure_microphone_permission(crate::MicrophonePermission::Denied),
+            Err(AudioError::PermissionDenied)
+        );
+        assert_eq!(
+            ensure_microphone_permission(crate::MicrophonePermission::NotDetermined),
+            Err(AudioError::PermissionDenied)
+        );
+        assert_eq!(
+            ensure_microphone_permission(crate::MicrophonePermission::Granted),
+            Ok(())
+        );
+    }
 
     /// Hardware-bound smoke test: records ~1s from the default input device
     /// and checks that at least a few frames of plausible size arrive. Not

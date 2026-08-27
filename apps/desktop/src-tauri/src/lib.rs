@@ -150,6 +150,7 @@ pub fn run() -> Result<(), String> {
             commands::set_api_key,
             commands::has_api_key,
             commands::permissions_report,
+            commands::request_permission,
             commands::test_refine,
             commands::cancel_dictation,
             commands::take_pending_notices,

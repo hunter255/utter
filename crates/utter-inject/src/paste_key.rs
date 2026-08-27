@@ -4,6 +4,14 @@
 //! only the synthetic key chord. Linux retains its layout-independent
 //! uinput Shift+Insert implementation while macOS uses Command+V.
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextInjectionPermission {
+    NotDetermined,
+    Granted,
+    Denied,
+    Unavailable,
+}
+
 #[cfg(target_os = "linux")]
 mod platform {
     use utter_core::InjectError;
@@ -27,14 +35,17 @@ mod platform {
 
 #[cfg(target_os = "macos")]
 mod platform {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     use objc2_core_graphics::{
         CGEvent, CGEventFlags, CGEventSource, CGEventSourceStateID, CGEventTapLocation,
-        CGPreflightPostEventAccess,
+        CGPreflightPostEventAccess, CGRequestPostEventAccess,
     };
     use utter_core::InjectError;
 
     const KEY_COMMAND: u16 = 0x37;
     const KEY_V: u16 = 0x09;
+    static REQUEST_ATTEMPTED: AtomicBool = AtomicBool::new(false);
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     struct KeyStep {
@@ -71,6 +82,29 @@ mod platform {
 
     pub(crate) fn post_event_access() -> bool {
         CGPreflightPostEventAccess()
+    }
+
+    pub(crate) fn permission_status() -> super::TextInjectionPermission {
+        if post_event_access() {
+            super::TextInjectionPermission::Granted
+        } else if REQUEST_ATTEMPTED.load(Ordering::Relaxed) {
+            super::TextInjectionPermission::Denied
+        } else {
+            // CoreGraphics exposes a preflight boolean, not TCC's full
+            // authorization state. Before this process has requested access,
+            // false is therefore presented as not determined so the user has
+            // an explicit action that can show the system prompt.
+            super::TextInjectionPermission::NotDetermined
+        }
+    }
+
+    pub(crate) fn request_permission() -> super::TextInjectionPermission {
+        REQUEST_ATTEMPTED.store(true, Ordering::Relaxed);
+        if CGRequestPostEventAccess() {
+            super::TextInjectionPermission::Granted
+        } else {
+            super::TextInjectionPermission::Denied
+        }
     }
 
     pub(crate) struct PasteKey;
@@ -170,3 +204,23 @@ mod platform {
 }
 
 pub(crate) use platform::PasteKey;
+
+#[cfg(target_os = "macos")]
+pub fn text_injection_permission() -> TextInjectionPermission {
+    platform::permission_status()
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn text_injection_permission() -> TextInjectionPermission {
+    TextInjectionPermission::Unavailable
+}
+
+#[cfg(target_os = "macos")]
+pub fn request_text_injection_permission() -> TextInjectionPermission {
+    platform::request_permission()
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn request_text_injection_permission() -> TextInjectionPermission {
+    TextInjectionPermission::Unavailable
+}

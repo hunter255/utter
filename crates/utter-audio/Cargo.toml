@@ -11,3 +11,8 @@ rubato = "4"
 thiserror = { workspace = true }
 tracing = { workspace = true }
 utter-core = { path = "../utter-core" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2 = "0.6"
+objc2-av-foundation = { version = "0.3", default-features = false, features = ["AVCaptureDevice", "AVMediaFormat", "block2"] }

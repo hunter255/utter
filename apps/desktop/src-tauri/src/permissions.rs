@@ -6,6 +6,34 @@
 
 use serde::Serialize;
 
+#[cfg(any(target_os = "macos", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PermissionStatus {
+    NotDetermined,
+    Granted,
+    Denied,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PermissionKind {
+    Microphone,
+    TextInjection,
+}
+
+impl PermissionKind {
+    pub(crate) fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "microphone" => Ok(Self::Microphone),
+            "text_injection" => Ok(Self::TextInjection),
+            other => Err(format!(
+                "unknown permission kind '{other}': expected 'microphone' or 'text_injection'"
+            )),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "platform", rename_all = "snake_case")]
 pub(crate) enum PermissionReport {
@@ -15,7 +43,12 @@ pub(crate) enum PermissionReport {
         uinput_writable: bool,
         fix_command: String,
     },
-    #[cfg(any(not(target_os = "linux"), test))]
+    #[cfg(any(target_os = "macos", test))]
+    Macos {
+        microphone: PermissionStatus,
+        text_injection: PermissionStatus,
+    },
+    #[cfg(any(not(any(target_os = "linux", target_os = "macos")), test))]
     Unsupported { os: String },
 }
 
@@ -24,10 +57,56 @@ pub(crate) fn report() -> PermissionReport {
     from_linux(utter_inject::check_linux_permissions())
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+pub(crate) fn report() -> PermissionReport {
+    PermissionReport::Macos {
+        microphone: microphone_status(utter_audio::microphone_permission()),
+        text_injection: text_injection_status(utter_inject::text_injection_permission()),
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub(crate) fn report() -> PermissionReport {
     PermissionReport::Unsupported {
         os: std::env::consts::OS.to_string(),
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn request(kind: PermissionKind) -> PermissionReport {
+    match kind {
+        PermissionKind::Microphone => {
+            utter_audio::request_microphone_permission();
+        }
+        PermissionKind::TextInjection => {
+            utter_inject::request_text_injection_permission();
+        }
+    }
+    report()
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn request(_kind: PermissionKind) -> PermissionReport {
+    report()
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn microphone_status(status: utter_audio::MicrophonePermission) -> PermissionStatus {
+    match status {
+        utter_audio::MicrophonePermission::NotDetermined => PermissionStatus::NotDetermined,
+        utter_audio::MicrophonePermission::Granted => PermissionStatus::Granted,
+        utter_audio::MicrophonePermission::Denied => PermissionStatus::Denied,
+        utter_audio::MicrophonePermission::Unavailable => PermissionStatus::Unavailable,
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn text_injection_status(status: utter_inject::TextInjectionPermission) -> PermissionStatus {
+    match status {
+        utter_inject::TextInjectionPermission::NotDetermined => PermissionStatus::NotDetermined,
+        utter_inject::TextInjectionPermission::Granted => PermissionStatus::Granted,
+        utter_inject::TextInjectionPermission::Denied => PermissionStatus::Denied,
+        utter_inject::TextInjectionPermission::Unavailable => PermissionStatus::Unavailable,
     }
 }
 
@@ -69,5 +148,38 @@ mod tests {
         assert!(json.contains(r#""platform":"unsupported""#));
         assert!(!json.contains("uinput"));
         assert!(!json.contains("usermod"));
+    }
+
+    #[test]
+    fn macos_report_serializes_both_permission_statuses() {
+        let report = PermissionReport::Macos {
+            microphone: PermissionStatus::Granted,
+            text_injection: PermissionStatus::Denied,
+        };
+        let json = serde_json::to_value(report).unwrap();
+
+        assert_eq!(json["platform"], "macos");
+        assert_eq!(json["microphone"], "granted");
+        assert_eq!(json["text_injection"], "denied");
+    }
+
+    #[test]
+    fn macos_permission_adapters_preserve_every_native_status() {
+        assert_eq!(
+            microphone_status(utter_audio::MicrophonePermission::NotDetermined),
+            PermissionStatus::NotDetermined
+        );
+        assert_eq!(
+            text_injection_status(utter_inject::TextInjectionPermission::Unavailable),
+            PermissionStatus::Unavailable
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_permission_kind_before_any_platform_call() {
+        assert_eq!(
+            PermissionKind::parse("camera").unwrap_err(),
+            "unknown permission kind 'camera': expected 'microphone' or 'text_injection'"
+        );
     }
 }

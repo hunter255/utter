@@ -89,6 +89,11 @@ describe('api command wrappers', () => {
     expect(mockInvoke).toHaveBeenCalledWith('permissions_report')
   })
 
+  it('requestPermission -> request_permission with a closed permission kind', async () => {
+    await api.requestPermission('microphone')
+    expect(mockInvoke).toHaveBeenCalledWith('request_permission', { kind: 'microphone' })
+  })
+
   it('testRefine -> test_refine with a `sample` key', async () => {
     await api.testRefine('hello world')
     expect(mockInvoke).toHaveBeenCalledWith('test_refine', { sample: 'hello world' })
