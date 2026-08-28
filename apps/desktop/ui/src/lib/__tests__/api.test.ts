@@ -94,6 +94,11 @@ describe('api command wrappers', () => {
     expect(mockInvoke).toHaveBeenCalledWith('request_permission', { kind: 'microphone' })
   })
 
+  it('platformCapabilities -> platform_capabilities', async () => {
+    await api.platformCapabilities()
+    expect(mockInvoke).toHaveBeenCalledWith('platform_capabilities')
+  })
+
   it('testRefine -> test_refine with a `sample` key', async () => {
     await api.testRefine('hello world')
     expect(mockInvoke).toHaveBeenCalledWith('test_refine', { sample: 'hello world' })

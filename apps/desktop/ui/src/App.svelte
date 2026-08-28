@@ -3,10 +3,11 @@
   import type { UnlistenFn } from '@tauri-apps/api/event'
 
   import Notices from './lib/components/Notices.svelte'
+  import * as api from './lib/api'
   import { noticeStore } from './lib/notices'
   import { settingsStore } from './lib/stores'
   import { applyTheme } from './lib/theme'
-  import { deepEqual, defaultSettings } from './lib/types'
+  import { deepEqual, defaultSettings, type PlatformCapabilities } from './lib/types'
 
   import General from './pages/General.svelte'
   import Dictation from './pages/Dictation.svelte'
@@ -54,6 +55,7 @@
   let loading = $state(true)
   let loadError = $state('')
   let showOnboarding = $state(false)
+  let capabilities = $state<PlatformCapabilities | null>(null)
 
   function isDefaultSettings(settings: unknown): boolean {
     return deepEqual(settings, defaultSettings())
@@ -85,7 +87,11 @@
       .catch(() => {})
 
     try {
-      const loaded = await settingsStore.load()
+      const [loaded, loadedCapabilities] = await Promise.all([
+        settingsStore.load(),
+        api.platformCapabilities(),
+      ])
+      capabilities = loadedCapabilities
       showOnboarding = !localStorage.getItem(ONBOARDED_KEY) && isDefaultSettings(loaded)
     } catch (err) {
       loadError = `Failed to load settings: ${String(err)}`
@@ -116,9 +122,9 @@
   <div class="status">Loading settings…</div>
 {:else if loadError}
   <div class="status error">{loadError}</div>
-{:else if showOnboarding}
-  <Onboarding onDone={finishOnboarding} />
-{:else if $settingsStore}
+{:else if showOnboarding && capabilities}
+  <Onboarding onDone={finishOnboarding} {capabilities} />
+{:else if $settingsStore && capabilities}
   <div class="shell">
     <nav aria-label="Settings sections">
       <div class="brand">Utter</div>
@@ -142,7 +148,7 @@
       {:else if hash === 'dictation'}
         <Dictation />
       {:else if hash === 'profiles'}
-        <Profiles />
+        <Profiles {capabilities} />
       {:else if hash === 'engines'}
         <Engines />
       {:else if hash === 'refinement'}
@@ -154,7 +160,7 @@
       {:else if hash === 'history'}
         <History />
       {:else if hash === 'advanced'}
-        <Advanced />
+        <Advanced {capabilities} />
       {/if}
     </main>
   </div>

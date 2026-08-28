@@ -266,6 +266,13 @@ export type PermissionReport =
 export type PermissionStatus = 'not_determined' | 'granted' | 'denied' | 'unavailable'
 export type PermissionKind = 'microphone' | 'text_injection'
 
+/** `src-tauri/src/platform.rs::PlatformCapabilities` */
+export interface PlatformCapabilities {
+  os: 'linux' | 'macos' | 'other'
+  modifier_only_hotkeys: boolean
+  injection_methods: InjectionPreference[]
+}
+
 /** Payload of the `model-progress` event (`src-tauri/src/events.rs::ModelProgress`). */
 export interface ModelProgressPayload {
   id: string

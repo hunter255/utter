@@ -7,7 +7,13 @@
   import Slider from '../lib/components/Slider.svelte'
   import * as api from '../lib/api'
   import { settingsStore } from '../lib/stores'
-  import type { InjectionPreference } from '../lib/types'
+  import type { InjectionPreference, PlatformCapabilities } from '../lib/types'
+
+  interface Props {
+    capabilities: PlatformCapabilities
+  }
+
+  let { capabilities }: Props = $props()
 
   let settings = $derived($settingsStore!)
 
@@ -17,6 +23,12 @@
     { value: 'type', label: 'Simulated typing' },
     { value: 'clipboard_only', label: 'Clipboard only (no auto-paste)' },
   ]
+  let availableInjectionOptions = $derived(
+    INJECTION_OPTIONS.filter((option) => capabilities.injection_methods.includes(option.value)),
+  )
+  let configuredInjectionAvailable = $derived(
+    capabilities.injection_methods.includes(settings.advanced.injection),
+  )
 
   const LOG_LEVEL_OPTIONS = ['trace', 'debug', 'info', 'warn', 'error'].map((v) => ({
     value: v,
@@ -44,12 +56,18 @@
   <Field label="Text injection" for="injection" hint="How refined text is delivered to the focused app.">
     <Select
       id="injection"
-      options={INJECTION_OPTIONS}
+      options={availableInjectionOptions}
       bind:value={
         () => settings.advanced.injection,
         (v) => settingsStore.patch({ advanced: { injection: v as InjectionPreference } })
       }
     />
+    {#if !configuredInjectionAvailable}
+      <p class="warning">
+        The configured method is unavailable on {capabilities.os}; choose one of the supported
+        methods above.
+      </p>
+    {/if}
   </Field>
 
   <Field label="Audio input device" for="audio-device">
@@ -98,6 +116,11 @@
 <style>
   .error {
     color: var(--danger);
+    font-size: 13px;
+  }
+
+  .warning {
+    color: var(--warning);
     font-size: 13px;
   }
 </style>

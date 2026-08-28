@@ -401,6 +401,12 @@ pub async fn request_permission(app: AppHandle, kind: String) -> Result<Permissi
     .map_err(|e| format!("request_permission task failed to run: {e}"))?
 }
 
+/// Returns compile-time platform support only; no I/O or OS prompt is involved.
+#[tauri::command]
+pub fn platform_capabilities() -> crate::platform::PlatformCapabilities {
+    crate::platform::capabilities()
+}
+
 #[tauri::command]
 pub async fn test_refine(app: AppHandle, sample: String) -> Result<String, String> {
     let result = tauri::async_runtime::spawn_blocking(move || {

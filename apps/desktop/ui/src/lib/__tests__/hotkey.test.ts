@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
-import { chordsConflict, formatCombo, isModifierToken, parseChordTokens, tokenFor } from '../hotkey'
+import {
+  chordsConflict,
+  formatCombo,
+  hasBaseKey,
+  isModifierToken,
+  parseChordTokens,
+  tokenFor,
+} from '../hotkey'
 
 describe('tokenFor', () => {
   it('reads plain letters and digits from `key` when `code` is absent', () => {
@@ -91,6 +98,17 @@ describe('parseChordTokens', () => {
     expect(parseChordTokens('')).toBeNull()
     expect(parseChordTokens('+')).toBeNull()
     expect(parseChordTokens('   ')).toBeNull()
+  })
+})
+
+describe('hasBaseKey', () => {
+  it('rejects empty and modifier-only chords', () => {
+    expect(hasBaseKey('')).toBe(false)
+    expect(hasBaseKey('ctrl+super')).toBe(false)
+  })
+
+  it('accepts a chord with one non-modifier key', () => {
+    expect(hasBaseKey('ctrl+alt+space')).toBe(true)
   })
 })
 
