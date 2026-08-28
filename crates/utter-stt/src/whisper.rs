@@ -6,8 +6,9 @@
 //! inference in [`SttEngine::finish`]; it never emits partial transcripts.
 
 use std::path::Path;
-use std::sync::Once;
+use std::sync::{Once, OnceLock};
 
+use regex::Regex;
 use utter_core::{SttEngine, SttError, TranscribeOptions, Transcript};
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
@@ -60,6 +61,13 @@ pub struct WhisperDecodeConfig {
     condition_on_previous_text: bool,
     max_text_context: Option<i32>,
     entropy_threshold: Option<f32>,
+    postprocess: WhisperPostprocess,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum WhisperPostprocess {
+    None,
+    BreezeBoundaryGlue,
 }
 
 impl WhisperDecodeConfig {
@@ -72,6 +80,7 @@ impl WhisperDecodeConfig {
             condition_on_previous_text: true,
             max_text_context: None,
             entropy_threshold: None,
+            postprocess: WhisperPostprocess::None,
         }
     }
 
@@ -83,6 +92,20 @@ impl WhisperDecodeConfig {
             condition_on_previous_text: true,
             max_text_context: Some(128),
             entropy_threshold: Some(2.8),
+            postprocess: WhisperPostprocess::None,
+        }
+    }
+
+    /// Breeze-ASR-25 uses normal Whisper context and needs a conservative
+    /// repair for sentence boundaries it sometimes glues in mixed Russian
+    /// and English output.
+    pub const fn breeze() -> Self {
+        Self {
+            single_segment: false,
+            condition_on_previous_text: true,
+            max_text_context: None,
+            entropy_threshold: None,
+            postprocess: WhisperPostprocess::BreezeBoundaryGlue,
         }
     }
 }
@@ -97,6 +120,7 @@ impl Default for WhisperDecodeConfig {
             condition_on_previous_text: false,
             max_text_context: None,
             entropy_threshold: None,
+            postprocess: WhisperPostprocess::None,
         }
     }
 }
@@ -271,6 +295,10 @@ fn run_full_inference(
         raw_segments.push(segment_text.into_owned());
     }
     let text = join_speech_segments(raw_segments.iter().map(String::as_str));
+    let text = match decode.postprocess {
+        WhisperPostprocess::None => text,
+        WhisperPostprocess::BreezeBoundaryGlue => fix_breeze_boundary_glue(&text),
+    };
 
     let language = match &opts.language {
         Some(lang) => Some(lang.clone()),
@@ -352,6 +380,39 @@ fn join_speech_segments<'a>(raw_segments: impl Iterator<Item = &'a str>) -> Stri
         .join(" ")
 }
 
+/// Repairs sentence/word boundaries Breeze-ASR-25 can omit around Cyrillic
+/// text. Every rule requires Cyrillic on at least one side, so ordinary Latin
+/// constructs such as `iPhone`, `camelCase`, `.NET`, and `API.SDK` are left
+/// untouched.
+fn fix_breeze_boundary_glue(text: &str) -> String {
+    static PERIOD_FROM_CYR: OnceLock<Regex> = OnceLock::new();
+    static PERIOD_FROM_CYR_SHORT: OnceLock<Regex> = OnceLock::new();
+    static PERIOD_FROM_LAT: OnceLock<Regex> = OnceLock::new();
+    static PERIOD_FROM_LAT_SHORT: OnceLock<Regex> = OnceLock::new();
+    static CASE_FROM_CYR: OnceLock<Regex> = OnceLock::new();
+    static CASE_FROM_LAT: OnceLock<Regex> = OnceLock::new();
+
+    let period_from_cyr = PERIOD_FROM_CYR
+        .get_or_init(|| Regex::new(r"([а-яё])\.([А-ЯЁA-Z][а-яёa-z])").expect("valid regex"));
+    let period_from_cyr_short = PERIOD_FROM_CYR_SHORT
+        .get_or_init(|| Regex::new(r"([а-яё])\.([А-ЯЁA-Z])\b").expect("valid regex"));
+    let period_from_lat = PERIOD_FROM_LAT
+        .get_or_init(|| Regex::new(r"([a-zA-Z])\.([А-ЯЁ][а-яё])").expect("valid regex"));
+    let period_from_lat_short = PERIOD_FROM_LAT_SHORT
+        .get_or_init(|| Regex::new(r"([a-zA-Z])\.([А-ЯЁ])\b").expect("valid regex"));
+    let case_from_cyr =
+        CASE_FROM_CYR.get_or_init(|| Regex::new(r"([а-яё])([А-ЯЁA-Z])").expect("valid regex"));
+    let case_from_lat =
+        CASE_FROM_LAT.get_or_init(|| Regex::new(r"([a-z])([А-ЯЁ])").expect("valid regex"));
+
+    let text = period_from_cyr.replace_all(text, "$1. $2");
+    let text = period_from_cyr_short.replace_all(&text, "$1. $2");
+    let text = period_from_lat.replace_all(&text, "$1. $2");
+    let text = period_from_lat_short.replace_all(&text, "$1. $2");
+    let text = case_from_cyr.replace_all(&text, "$1 $2");
+    case_from_lat.replace_all(&text, "$1 $2").into_owned()
+}
+
 /// whisper-rs converts strings to `CString` internally and panics on
 /// interior null bytes; checking up front turns that potential panic into an
 /// ordinary [`SttError::Engine`].
@@ -378,6 +439,7 @@ mod tests {
         assert!(!config.condition_on_previous_text);
         assert_eq!(config.max_text_context, None);
         assert_eq!(config.entropy_threshold, None);
+        assert_eq!(config.postprocess, WhisperPostprocess::None);
     }
 
     #[test]
@@ -388,6 +450,7 @@ mod tests {
         assert!(config.condition_on_previous_text);
         assert_eq!(config.max_text_context, None);
         assert_eq!(config.entropy_threshold, None);
+        assert_eq!(config.postprocess, WhisperPostprocess::None);
     }
 
     #[test]
@@ -398,6 +461,42 @@ mod tests {
         assert!(config.condition_on_previous_text);
         assert_eq!(config.max_text_context, Some(128));
         assert_eq!(config.entropy_threshold, Some(2.8));
+        assert_eq!(config.postprocess, WhisperPostprocess::None);
+    }
+
+    #[test]
+    fn breeze_config_enables_context_and_only_its_boundary_repair() {
+        let config = WhisperDecodeConfig::breeze();
+
+        assert!(!config.single_segment);
+        assert!(config.condition_on_previous_text);
+        assert_eq!(config.max_text_context, None);
+        assert_eq!(config.entropy_threshold, None);
+        assert_eq!(config.postprocess, WhisperPostprocess::BreezeBoundaryGlue);
+    }
+
+    #[test]
+    fn breeze_boundary_repair_handles_cyrillic_and_mixed_sentence_glue() {
+        assert_eq!(
+            fix_breeze_boundary_glue("привет.Мир. словоHello. test.Привет"),
+            "привет. Мир. слово Hello. test. Привет"
+        );
+        assert_eq!(
+            fix_breeze_boundary_glue("предложение.Я думал через API.Это работает"),
+            "предложение. Я думал через API. Это работает"
+        );
+    }
+
+    #[test]
+    fn breeze_boundary_repair_preserves_latin_products_and_extensions() {
+        let text = "iPhone camelCase OpenAI app.NET API.SDK файл.PDF стек.NET";
+        assert_eq!(fix_breeze_boundary_glue(text), text);
+    }
+
+    #[test]
+    fn breeze_boundary_repair_is_idempotent_for_clean_text() {
+        let text = "Это нормальный текст. Без проблем. OpenAI работает.";
+        assert_eq!(fix_breeze_boundary_glue(text), text);
     }
 
     #[test]
