@@ -9,7 +9,7 @@
   import HotkeyPicker from '../lib/components/HotkeyPicker.svelte'
   import * as api from '../lib/api'
   import { chordsConflict, hasBaseKey, parseChordTokens } from '../lib/hotkey'
-  import { previewModelOptions } from '../lib/models'
+  import { modelCapabilityLabel, modelLanguageWarning, previewModelOptions } from '../lib/models'
   import { mergeDeep, settingsStore, type DeepPartial } from '../lib/stores'
   import type {
     EngineKind,
@@ -61,11 +61,15 @@
   let modelsError = $state('')
 
   let whisperOptions = $derived(
-    models.filter((m) => m.engine === 'whisper').map((m) => ({ value: m.id, label: m.label })),
+    models
+      .filter((m) => m.role === 'final' && m.engine === 'whisper')
+      .map((m) => ({ value: m.id, label: `${m.label} — ${modelCapabilityLabel(m)}` })),
   )
   let sherpaOptions = $derived([
     { value: '', label: 'None selected' },
-    ...models.filter((m) => m.engine === 'sherpa').map((m) => ({ value: m.id, label: m.label })),
+    ...models
+      .filter((m) => m.role === 'final' && m.engine === 'sherpa')
+      .map((m) => ({ value: m.id, label: `${m.label} — ${modelCapabilityLabel(m)}` })),
   ])
   // Streaming models only, never the engine models above — see
   // `previewModelOptions`, which is where that separation is pinned.
@@ -121,6 +125,29 @@
       i === index ? mergeDeep(profile, changes) : profile,
     )
     settingsStore.patch({ profiles })
+  }
+
+  function activeModel(profile: LanguageProfile): ModelInfo | null {
+    const id =
+      profile.engine.active === 'whisper'
+        ? profile.engine.whisper_model
+        : profile.engine.active === 'sherpa'
+          ? profile.engine.sherpa_model
+          : null
+    return models.find((model) => model.id === id && model.role === 'final') ?? null
+  }
+
+  function draftModel(profile: LanguageProfile): ModelInfo | null {
+    if (!profile.draft) return null
+    return models.find((model) => model.id === profile.draft?.model && model.role === 'preview') ?? null
+  }
+
+  function activeLanguageWarning(profile: LanguageProfile): string | null {
+    return modelLanguageWarning(activeModel(profile), profile.language)
+  }
+
+  function draftLanguageWarning(profile: LanguageProfile): string | null {
+    return modelLanguageWarning(draftModel(profile), profile.language)
   }
 
   function nextProfileId(): string {
@@ -294,6 +321,10 @@
       </Field>
     {/if}
 
+    {#if activeLanguageWarning(profile)}
+      <p class="warning">{activeLanguageWarning(profile)}</p>
+    {/if}
+
     {#if profile.engine.active !== 'sherpa'}
       <Field
         label="Recognition prompt"
@@ -345,6 +376,9 @@
           (v) => updateProfile(index, { draft: v === '' ? null : { model: v } })
         }
       />
+      {#if draftLanguageWarning(profile)}
+        <p class="warning">{draftLanguageWarning(profile)}</p>
+      {/if}
     </Field>
 
     <Field

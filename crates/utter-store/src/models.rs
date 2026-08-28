@@ -23,6 +23,26 @@ use sha2::{Digest, Sha256};
 
 use crate::error::IntegrityError;
 
+/// Where a model's output is used in the dictation pipeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelRole {
+    /// Produces the transcript that can be inserted into the focused app.
+    Final,
+    /// Produces low-latency text shown only in the recording HUD.
+    Preview,
+}
+
+/// A deliberately coarse relative cost indicator. Actual latency depends on
+/// hardware and acceleration, so the catalog avoids promising timings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PerformanceClass {
+    Fast,
+    Balanced,
+    Heavy,
+}
+
 /// A speech-to-text model available for download, with its installed state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ModelInfo {
@@ -31,6 +51,13 @@ pub struct ModelInfo {
     pub label: String,
     pub size_mb: u32,
     pub installed: bool,
+    /// BCP-47 language prefixes, or `"*"` for broadly multilingual models.
+    pub supported_languages: Vec<String>,
+    pub role: ModelRole,
+    pub performance_class: PerformanceClass,
+    /// Short, user-facing reasons to choose this model. These are qualitative
+    /// recommendations, not hardware-independent benchmark promises.
+    pub recommendation_tags: Vec<String>,
 }
 
 /// One downloadable file that makes up a catalog entry.
@@ -71,6 +98,10 @@ struct CatalogEntry {
     engine: &'static str,
     label: &'static str,
     size_mb: u32,
+    supported_languages: &'static [&'static str],
+    role: ModelRole,
+    performance_class: PerformanceClass,
+    recommendation_tags: &'static [&'static str],
     artifacts: &'static [Artifact],
 }
 
@@ -93,6 +124,10 @@ const CATALOG: &[CatalogEntry] = &[
         engine: "whisper",
         label: "Whisper Tiny",
         size_mb: 74,
+        supported_languages: &["*"],
+        role: ModelRole::Final,
+        performance_class: PerformanceClass::Fast,
+        recommendation_tags: &["Lowest latency", "Lower accuracy"],
         artifacts: &[Artifact {
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
             sha256: "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
@@ -105,6 +140,10 @@ const CATALOG: &[CatalogEntry] = &[
         engine: "whisper",
         label: "Whisper Base",
         size_mb: 141,
+        supported_languages: &["*"],
+        role: ModelRole::Final,
+        performance_class: PerformanceClass::Fast,
+        recommendation_tags: &["Lightweight", "Lower accuracy"],
         artifacts: &[Artifact {
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
             sha256: "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
@@ -117,6 +156,10 @@ const CATALOG: &[CatalogEntry] = &[
         engine: "whisper",
         label: "Whisper Small",
         size_mb: 465,
+        supported_languages: &["*"],
+        role: ModelRole::Final,
+        performance_class: PerformanceClass::Balanced,
+        recommendation_tags: &["Balanced multilingual"],
         artifacts: &[Artifact {
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
             sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
@@ -129,6 +172,10 @@ const CATALOG: &[CatalogEntry] = &[
         engine: "whisper",
         label: "Whisper Medium",
         size_mb: 1463,
+        supported_languages: &["*"],
+        role: ModelRole::Final,
+        performance_class: PerformanceClass::Heavy,
+        recommendation_tags: &["Higher accuracy"],
         artifacts: &[Artifact {
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",
             sha256: "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208",
@@ -141,6 +188,10 @@ const CATALOG: &[CatalogEntry] = &[
         engine: "whisper",
         label: "Whisper Large v3 Turbo (q5_0)",
         size_mb: 547,
+        supported_languages: &["*"],
+        role: ModelRole::Final,
+        performance_class: PerformanceClass::Balanced,
+        recommendation_tags: &["High accuracy", "Mixed language"],
         artifacts: &[Artifact {
             url:
                 "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
@@ -154,6 +205,10 @@ const CATALOG: &[CatalogEntry] = &[
         engine: "whisper",
         label: "Breeze-ASR-25 (q5_k, Russian + English)",
         size_mb: 1030,
+        supported_languages: &["ru", "en"],
+        role: ModelRole::Final,
+        performance_class: PerformanceClass::Heavy,
+        recommendation_tags: &["Mixed Russian + English"],
         artifacts: &[Artifact {
             url: "https://blob.handy.computer/breeze-asr-q5_k.bin",
             sha256: "8efbf0ce8a3f50fe332b7617da787fb81354b358c288b008d3bdef8359df64c6",
@@ -166,6 +221,10 @@ const CATALOG: &[CatalogEntry] = &[
         engine: "whisper",
         label: "Whisper Large v2 (q5_0)",
         size_mb: 1030,
+        supported_languages: &["*"],
+        role: ModelRole::Final,
+        performance_class: PerformanceClass::Heavy,
+        recommendation_tags: &["Stable quality"],
         artifacts: &[Artifact {
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/bf8b606c2fcd9173605cdf6bd2ac8a75a8141b6c/ggml-large-v2-q5_0.bin",
             sha256: "3a214837221e4530dbc1fe8d734f302af393eb30bd0ed046042ebf4baf70f6f2",
@@ -178,6 +237,10 @@ const CATALOG: &[CatalogEntry] = &[
         engine: "sherpa",
         label: "GigaAM-v3 (Russian)",
         size_mb: 221,
+        supported_languages: &["ru"],
+        role: ModelRole::Final,
+        performance_class: PerformanceClass::Fast,
+        recommendation_tags: &["Recommended for Russian", "Punctuation included"],
         artifacts: &[
             Artifact {
                 url: "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-transducer-punct-giga-am-v3-russian-2025-12-16/resolve/a6039be7cee829a9044a69ac0ebaf1c191217c97/encoder.int8.onnx",
@@ -210,6 +273,10 @@ const CATALOG: &[CatalogEntry] = &[
         engine: "sherpa",
         label: "Parakeet TDT (English)",
         size_mb: 455,
+        supported_languages: &["en"],
+        role: ModelRole::Final,
+        performance_class: PerformanceClass::Fast,
+        recommendation_tags: &["Recommended for English", "Punctuation included"],
         artifacts: &[
             Artifact {
                 url: "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet_tdt_transducer_110m-en-36000/resolve/e9bea5a06247dc3f55319ff23d34b0328f2f5ddf/encoder.onnx",
@@ -242,6 +309,10 @@ const CATALOG: &[CatalogEntry] = &[
         engine: "sherpa-streaming",
         label: "Zipformer Small (Russian, streaming)",
         size_mb: 27,
+        supported_languages: &["ru"],
+        role: ModelRole::Preview,
+        performance_class: PerformanceClass::Fast,
+        recommendation_tags: &["Live preview only"],
         artifacts: &[
             Artifact {
                 url: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-small-ru-vosk-int8-2025-08-16/resolve/31fa603e4f31279c6e1f7600fed13dc4312663ab/encoder.int8.onnx",
@@ -274,6 +345,10 @@ const CATALOG: &[CatalogEntry] = &[
         engine: "sherpa-streaming",
         label: "Zipformer Small (English, streaming)",
         size_mb: 43,
+        supported_languages: &["en"],
+        role: ModelRole::Preview,
+        performance_class: PerformanceClass::Fast,
+        recommendation_tags: &["Live preview only"],
         artifacts: &[
             Artifact {
                 url: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17/resolve/d42f2d9f7ca24806fb667456a18a9f1b60f70d16/encoder-epoch-99-avg-1.int8.onnx",
@@ -341,6 +416,18 @@ impl ModelManager {
                     label: entry.label.to_string(),
                     size_mb: entry.size_mb,
                     installed: self.is_installed(entry, &path),
+                    supported_languages: entry
+                        .supported_languages
+                        .iter()
+                        .map(|language| (*language).to_string())
+                        .collect(),
+                    role: entry.role,
+                    performance_class: entry.performance_class,
+                    recommendation_tags: entry
+                        .recommendation_tags
+                        .iter()
+                        .map(|tag| (*tag).to_string())
+                        .collect(),
                 }
             })
             .collect()
@@ -702,6 +789,10 @@ mod tests {
             engine: "whisper",
             label: "Test Whisper",
             size_mb: 1,
+            supported_languages: &["*"],
+            role: ModelRole::Final,
+            performance_class: PerformanceClass::Fast,
+            recommendation_tags: &["Test model"],
             artifacts: leak_artifacts(vec![Artifact {
                 url: Box::leak(url.into_boxed_str()),
                 sha256: Box::leak(sha256.into_boxed_str()),
@@ -723,6 +814,10 @@ mod tests {
             engine: "sherpa",
             label: "Test Two-File Model",
             size_mb: 1,
+            supported_languages: &["en"],
+            role: ModelRole::Final,
+            performance_class: PerformanceClass::Fast,
+            recommendation_tags: &["Test model"],
             artifacts: &[
                 Artifact {
                     url: "unused",
@@ -753,6 +848,10 @@ mod tests {
             engine: "sherpa",
             label: "Test Multi-Artifact",
             size_mb: 1,
+            supported_languages: &["en"],
+            role: ModelRole::Final,
+            performance_class: PerformanceClass::Fast,
+            recommendation_tags: &["Test model"],
             artifacts: leak_artifacts(vec![
                 Artifact {
                     url: Box::leak(encoder_url.into_boxed_str()),
@@ -1250,6 +1349,41 @@ mod tests {
     }
 
     #[test]
+    fn catalog_entries_declare_complete_user_facing_capabilities() {
+        for entry in CATALOG {
+            assert!(
+                !entry.supported_languages.is_empty(),
+                "{} has no language metadata",
+                entry.id
+            );
+            assert!(
+                entry
+                    .supported_languages
+                    .iter()
+                    .all(|language| !language.trim().is_empty()),
+                "{} has an empty language tag",
+                entry.id
+            );
+            assert!(
+                !entry.recommendation_tags.is_empty(),
+                "{} has no recommendation tags",
+                entry.id
+            );
+
+            let expected_role = if entry.engine == "sherpa-streaming" {
+                ModelRole::Preview
+            } else {
+                ModelRole::Final
+            };
+            assert_eq!(
+                entry.role, expected_role,
+                "{} has a role that disagrees with its runtime engine",
+                entry.id
+            );
+        }
+    }
+
+    #[test]
     fn breeze_catalog_entry_pins_the_benchmarked_artifact() {
         let entry = CATALOG
             .iter()
@@ -1297,14 +1431,9 @@ mod tests {
         );
     }
 
-    /// The desktop UI's final-model picker (the engine whose output actually
-    /// gets injected) builds its options by filtering the catalog on
-    /// `engine == "sherpa"`. A streaming preview model must never appear in
-    /// that set: it would let a user select a fast, lower-accuracy draft
-    /// engine as the one whose text gets injected, silently replacing an
-    /// offline model like GigaAM-v3. This is what actually keeps the two
-    /// roles apart, so it is asserted directly against the real catalog
-    /// rather than a test fixture.
+    /// The desktop UI's final-model picker uses the explicit role rather than
+    /// inferring purpose from an engine name. Assert the real catalog keeps
+    /// every streaming entry out of that set.
     #[test]
     fn streaming_preview_models_are_excluded_from_the_injected_transcript_engine_set() {
         let models = ModelManager::new(PathBuf::from("/nonexistent")).catalog();
@@ -1313,20 +1442,17 @@ mod tests {
         assert!(
             models
                 .iter()
-                .filter(|m| m.engine == "sherpa")
+                .filter(|m| m.role == ModelRole::Final)
                 .all(|m| !streaming_ids.contains(&m.id.as_str())),
-            "a streaming preview model must not appear in the plain sherpa engine set"
+            "a streaming preview model must not appear in the final transcript set"
         );
 
         for id in streaming_ids {
-            let engine = models
-                .iter()
-                .find(|m| m.id == id)
-                .map(|m| m.engine.as_str());
+            let role = models.iter().find(|m| m.id == id).map(|m| m.role);
             assert_eq!(
-                engine,
-                Some("sherpa-streaming"),
-                "{id} must be catalogued under the sherpa-streaming engine"
+                role,
+                Some(ModelRole::Preview),
+                "{id} must be catalogued for preview only"
             );
         }
     }

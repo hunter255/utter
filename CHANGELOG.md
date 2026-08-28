@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Model catalog entries now describe final/preview role, supported languages,
+  relative runtime cost, and recommendation tags. Onboarding exposes language
+  selection alongside every final local model, while onboarding and profile
+  settings warn about incompatible model/language pairs without silently
+  changing either choice.
+
 ### Changed
 
 - The permanent macOS bundle and Keychain identity is
