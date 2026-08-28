@@ -90,6 +90,17 @@ pub enum ModelRole {
     Preview,
 }
 
+/// Native online-recognizer layout used by a streaming preview model.
+///
+/// This stays out of [`ModelInfo`]: the frontend only needs the model's role
+/// and user-facing capabilities, while the desktop loader needs this exact
+/// type before it hands files to sherpa-onnx's native boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamingModelFamily {
+    Transducer,
+    TOneCtc,
+}
+
 /// A deliberately coarse relative cost indicator. Actual latency depends on
 /// hardware and acceleration, so the catalog avoids promising timings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -157,6 +168,7 @@ struct CatalogEntry {
     size_mb: u32,
     supported_languages: &'static [&'static str],
     role: ModelRole,
+    streaming_family: Option<StreamingModelFamily>,
     performance_class: PerformanceClass,
     recommendation_tags: &'static [&'static str],
     /// Ordered, trusted endpoint substitutions. Every resulting source still
@@ -200,6 +212,7 @@ const CATALOG: &[CatalogEntry] = &[
         size_mb: 74,
         supported_languages: &["*"],
         role: ModelRole::Final,
+        streaming_family: None,
         performance_class: PerformanceClass::Fast,
         recommendation_tags: &["Lowest latency", "Lower accuracy"],
         mirrors: HUGGING_FACE_MIRRORS,
@@ -217,6 +230,7 @@ const CATALOG: &[CatalogEntry] = &[
         size_mb: 141,
         supported_languages: &["*"],
         role: ModelRole::Final,
+        streaming_family: None,
         performance_class: PerformanceClass::Fast,
         recommendation_tags: &["Lightweight", "Lower accuracy"],
         mirrors: HUGGING_FACE_MIRRORS,
@@ -234,6 +248,7 @@ const CATALOG: &[CatalogEntry] = &[
         size_mb: 465,
         supported_languages: &["*"],
         role: ModelRole::Final,
+        streaming_family: None,
         performance_class: PerformanceClass::Balanced,
         recommendation_tags: &["Balanced multilingual"],
         mirrors: HUGGING_FACE_MIRRORS,
@@ -251,6 +266,7 @@ const CATALOG: &[CatalogEntry] = &[
         size_mb: 1463,
         supported_languages: &["*"],
         role: ModelRole::Final,
+        streaming_family: None,
         performance_class: PerformanceClass::Heavy,
         recommendation_tags: &["Higher accuracy"],
         mirrors: HUGGING_FACE_MIRRORS,
@@ -268,6 +284,7 @@ const CATALOG: &[CatalogEntry] = &[
         size_mb: 547,
         supported_languages: &["*"],
         role: ModelRole::Final,
+        streaming_family: None,
         performance_class: PerformanceClass::Balanced,
         recommendation_tags: &["High accuracy", "Mixed language"],
         mirrors: HUGGING_FACE_MIRRORS,
@@ -286,6 +303,7 @@ const CATALOG: &[CatalogEntry] = &[
         size_mb: 1030,
         supported_languages: &["ru", "en"],
         role: ModelRole::Final,
+        streaming_family: None,
         performance_class: PerformanceClass::Heavy,
         recommendation_tags: &["Mixed Russian + English"],
         mirrors: &[],
@@ -303,6 +321,7 @@ const CATALOG: &[CatalogEntry] = &[
         size_mb: 1030,
         supported_languages: &["*"],
         role: ModelRole::Final,
+        streaming_family: None,
         performance_class: PerformanceClass::Heavy,
         recommendation_tags: &["Stable quality"],
         mirrors: HUGGING_FACE_MIRRORS,
@@ -320,6 +339,7 @@ const CATALOG: &[CatalogEntry] = &[
         size_mb: 221,
         supported_languages: &["ru"],
         role: ModelRole::Final,
+        streaming_family: None,
         performance_class: PerformanceClass::Fast,
         recommendation_tags: &["Recommended for Russian", "Punctuation included"],
         mirrors: HUGGING_FACE_MIRRORS,
@@ -357,6 +377,7 @@ const CATALOG: &[CatalogEntry] = &[
         size_mb: 455,
         supported_languages: &["en"],
         role: ModelRole::Final,
+        streaming_family: None,
         performance_class: PerformanceClass::Fast,
         recommendation_tags: &["Recommended for English", "Punctuation included"],
         mirrors: HUGGING_FACE_MIRRORS,
@@ -394,6 +415,7 @@ const CATALOG: &[CatalogEntry] = &[
         size_mb: 27,
         supported_languages: &["ru"],
         role: ModelRole::Preview,
+        streaming_family: Some(StreamingModelFamily::Transducer),
         performance_class: PerformanceClass::Fast,
         recommendation_tags: &["Live preview only"],
         mirrors: HUGGING_FACE_MIRRORS,
@@ -431,6 +453,7 @@ const CATALOG: &[CatalogEntry] = &[
         size_mb: 43,
         supported_languages: &["en"],
         role: ModelRole::Preview,
+        streaming_family: Some(StreamingModelFamily::Transducer),
         performance_class: PerformanceClass::Fast,
         recommendation_tags: &["Live preview only"],
         mirrors: HUGGING_FACE_MIRRORS,
@@ -542,6 +565,16 @@ impl ModelManager {
     /// the loader looking exactly like a right one.
     pub fn engine_of(&self, id: &str) -> Option<&str> {
         self.find(id).map(|entry| entry.engine)
+    }
+
+    /// The native online-recognizer layout for a streaming preview model.
+    /// Returns `None` for an unknown id and for every non-streaming model.
+    ///
+    /// Callers must use this metadata rather than infer a family from an id
+    /// or artifact names: passing the wrong but otherwise intact ONNX files
+    /// to sherpa-onnx can terminate the whole process across the FFI boundary.
+    pub fn streaming_family_of(&self, id: &str) -> Option<StreamingModelFamily> {
+        self.find(id).and_then(|entry| entry.streaming_family)
     }
 
     /// The file names `id`'s artifacts are installed under, in catalog
@@ -1315,6 +1348,7 @@ mod tests {
             size_mb: 1,
             supported_languages: &["*"],
             role: ModelRole::Final,
+            streaming_family: None,
             performance_class: PerformanceClass::Fast,
             recommendation_tags: &["Test model"],
             mirrors,
@@ -1341,6 +1375,7 @@ mod tests {
             size_mb: 1,
             supported_languages: &["en"],
             role: ModelRole::Final,
+            streaming_family: None,
             performance_class: PerformanceClass::Fast,
             recommendation_tags: &["Test model"],
             mirrors: &[],
@@ -1376,6 +1411,7 @@ mod tests {
             size_mb: 1,
             supported_languages: &["en"],
             role: ModelRole::Final,
+            streaming_family: None,
             performance_class: PerformanceClass::Fast,
             recommendation_tags: &["Test model"],
             mirrors: &[],
@@ -2518,6 +2554,12 @@ mod tests {
                 "{} has a role that disagrees with its runtime engine",
                 entry.id
             );
+            assert_eq!(
+                entry.streaming_family.is_some(),
+                entry.role == ModelRole::Preview,
+                "{} must declare a streaming family exactly when it is a preview model",
+                entry.id
+            );
         }
     }
 
@@ -2618,6 +2660,26 @@ mod tests {
             "an id that is not catalogued at all has no kind, and must be \
              distinguishable from one that has the wrong kind"
         );
+    }
+
+    #[test]
+    fn streaming_family_is_typed_and_absent_for_final_models() {
+        let mut t_one = two_file_entry();
+        t_one.id = "test-t-one";
+        t_one.engine = "sherpa-streaming";
+        t_one.role = ModelRole::Preview;
+        t_one.streaming_family = Some(StreamingModelFamily::TOneCtc);
+        let models = ModelManager::with_catalog(
+            PathBuf::from("/nonexistent"),
+            vec![t_one, whisper_entry("unused".into(), "unused".into(), 0)],
+        );
+
+        assert_eq!(
+            models.streaming_family_of("test-t-one"),
+            Some(StreamingModelFamily::TOneCtc)
+        );
+        assert_eq!(models.streaming_family_of("test-whisper"), None);
+        assert_eq!(models.streaming_family_of("unknown"), None);
     }
 
     #[test]
