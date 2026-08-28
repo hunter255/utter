@@ -446,6 +446,43 @@ const CATALOG: &[CatalogEntry] = &[
             },
         ],
     },
+    // Source: csukuangfj/sherpa-onnx-streaming-t-one-russian-2025-09-08 at
+    // 9d63341e0f2d8a8b2edaa825aa1fcfe3c5283b47. The model is Apache-2.0
+    // (Copyright 2025 T-Software DC); the pinned upstream LICENSE has SHA-256
+    // c8e6ecb86af681d9815d1ada7b1a7780ea5e5cb68a5df94fc800adab1a6ce027.
+    // Only model.onnx and tokens.txt are installed because they are the exact
+    // file set the native T-One loader consumes.
+    CatalogEntry {
+        id: "t-one-ru",
+        engine: "sherpa-streaming",
+        label: "T-One CTC (Russian, streaming)",
+        size_mb: 138,
+        supported_languages: &["ru"],
+        role: ModelRole::Preview,
+        streaming_family: Some(StreamingModelFamily::TOneCtc),
+        performance_class: PerformanceClass::Balanced,
+        recommendation_tags: &[
+            "Accuracy-focused Russian preview",
+            "Live preview only",
+            "No dictionary bias",
+            "Lowercase Cyrillic; no punctuation, digits, or Latin",
+        ],
+        mirrors: HUGGING_FACE_MIRRORS,
+        artifacts: &[
+            Artifact {
+                url: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-t-one-russian-2025-09-08/resolve/9d63341e0f2d8a8b2edaa825aa1fcfe3c5283b47/model.onnx",
+                sha256: "5ded080e2a6c86ecc11bcb0902d77524eb3e8b0844cb0c0754347f5aafb4dabc",
+                name: "model.onnx",
+                size_bytes: 144_193_702,
+            },
+            Artifact {
+                url: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-t-one-russian-2025-09-08/resolve/9d63341e0f2d8a8b2edaa825aa1fcfe3c5283b47/tokens.txt",
+                sha256: "27f7b3ba2096c572375fba1a6b29af1f80d86e08a329940612908112695f97e0",
+                name: "tokens.txt",
+                size_bytes: 202,
+            },
+        ],
+    },
     CatalogEntry {
         id: "zipformer-en-small",
         engine: "sherpa-streaming",
@@ -2582,6 +2619,52 @@ mod tests {
     }
 
     #[test]
+    fn t_one_catalog_entry_pins_the_benchmarked_russian_preview() {
+        let entry = CATALOG
+            .iter()
+            .find(|entry| entry.id == "t-one-ru")
+            .expect("T-One must be in the catalog");
+
+        assert_eq!(entry.engine, "sherpa-streaming");
+        assert_eq!(entry.role, ModelRole::Preview);
+        assert_eq!(entry.streaming_family, Some(StreamingModelFamily::TOneCtc));
+        assert_eq!(entry.supported_languages, &["ru"]);
+        assert_eq!(entry.size_mb, 138);
+        assert_eq!(entry.artifacts.len(), 2);
+
+        let model = &entry.artifacts[0];
+        assert_eq!(model.name, "model.onnx");
+        assert_eq!(model.size_bytes, 144_193_702);
+        assert_eq!(
+            model.sha256,
+            "5ded080e2a6c86ecc11bcb0902d77524eb3e8b0844cb0c0754347f5aafb4dabc"
+        );
+        assert!(model
+            .url
+            .contains("/9d63341e0f2d8a8b2edaa825aa1fcfe3c5283b47/model.onnx"));
+
+        let tokens = &entry.artifacts[1];
+        assert_eq!(tokens.name, "tokens.txt");
+        assert_eq!(tokens.size_bytes, 202);
+        assert_eq!(
+            tokens.sha256,
+            "27f7b3ba2096c572375fba1a6b29af1f80d86e08a329940612908112695f97e0"
+        );
+        assert!(tokens
+            .url
+            .contains("/9d63341e0f2d8a8b2edaa825aa1fcfe3c5283b47/tokens.txt"));
+
+        assert!(entry
+            .recommendation_tags
+            .contains(&"Accuracy-focused Russian preview"));
+        assert!(entry.recommendation_tags.contains(&"Live preview only"));
+        assert!(entry.recommendation_tags.contains(&"No dictionary bias"));
+        assert!(entry
+            .recommendation_tags
+            .contains(&"Lowercase Cyrillic; no punctuation, digits, or Latin"));
+    }
+
+    #[test]
     fn large_v2_catalog_entry_pins_the_official_q5_artifact() {
         let entry = CATALOG
             .iter()
@@ -2617,7 +2700,7 @@ mod tests {
     #[test]
     fn streaming_preview_models_are_excluded_from_the_injected_transcript_engine_set() {
         let models = ModelManager::new(PathBuf::from("/nonexistent")).catalog();
-        let streaming_ids = ["zipformer-ru-small", "zipformer-en-small"];
+        let streaming_ids = ["zipformer-ru-small", "t-one-ru", "zipformer-en-small"];
 
         assert!(
             models

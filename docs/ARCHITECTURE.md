@@ -12,7 +12,7 @@ plugged in at the edge.
 |---|---|
 | `utter-core` | Domain: the `Session` state machine, ports (`SttEngine`, `TextRefiner`, `TextInjector`), and shared types (`Transcript`, `Tone`, `InjectionMethod`). No I/O. |
 | `utter-audio` | Microphone capture via `cpal`, resampling to 16 kHz mono `i16` (`rubato`), RMS level and silence detection. |
-| `utter-stt` | Speech-to-text adapters behind Cargo features: `whisper` (whisper.cpp via `whisper-rs`), `sherpa` (two sherpa-onnx adapters over the `sherpa-onnx` crate — `SherpaOfflineEngine` on the offline recognizer, serving GigaAM-v3 for Russian and Parakeet TDT 110M for English, and `SherpaStreamingEngine` on the online recognizer, serving the small Zipformer preview models for the same two languages — all four on one native runtime), `cloud` (any OpenAI-compatible `/audio/transcriptions` endpoint). |
+| `utter-stt` | Speech-to-text adapters behind Cargo features: `whisper` (whisper.cpp via `whisper-rs`), `sherpa` (two sherpa-onnx adapters over one native runtime — `SherpaOfflineEngine` serves GigaAM-v3 for Russian and Parakeet TDT 110M for English; `SherpaStreamingEngine` serves Zipformer transducers for Russian/English and T-One CTC for Russian live preview), `cloud` (any OpenAI-compatible `/audio/transcriptions` endpoint). |
 | `utter-refine` | Transcript post-processing: dictionary replacement rules, snippet matching, prompt construction, and the LLM client (any OpenAI-compatible `/chat/completions` endpoint). |
 | `utter-inject` | Global hotkey capture (evdev, with an X11 `global-hotkey` fallback) and text injection backends (clipboard-paste, direct typing, clipboard-only), chained with automatic fallback. |
 | `utter-store` | TOML settings persistence, the SQLite-backed history repository, and the STT model catalog/downloader. |
@@ -198,15 +198,16 @@ partial and has no state for one.
   calls (cloud STT, LLM refinement) use `reqwest`'s blocking client from the
   runtime's own worker thread rather than pulling `tokio` into the domain
   or adapter crates.
-- **One sherpa-onnx adapter for two languages, not two engines** —
+- **Family-aware sherpa-onnx adapters, not one engine per model** —
   `SherpaOfflineEngine` doesn't know or care whether the directory it was
   given holds GigaAM-v3 or Parakeet TDT 110M: both are NeMo transducer
   exports with the same encoder/decoder/joiner/tokens layout (only the
   encoder filename differs — `encoder.int8.onnx` vs `encoder.onnx` — which
   `load()` resolves by trying both). `SherpaStreamingEngine` is split from it
   along a different axis — sherpa-onnx's online recognizer is a separate API,
-  not a mode of the offline one — and is itself language-agnostic the same
-  way, serving both Zipformer preview models. Three engines a profile can
+  not a mode of the offline one. Its typed family configuration selects either
+  the four-file Zipformer transducer layout or the two-file T-One CTC layout;
+  it never guesses from an id or filename. Three final engines a profile can
   pick (`whisper`, `sherpa`, `cloud`) plus the optional preview are therefore
   backed by two native runtimes — whisper.cpp and onnxruntime via
   sherpa-onnx, both linked statically — with the onnxruntime one covering
@@ -242,15 +243,16 @@ partial and has no state for one.
 - **A model's kind is checked against the catalog before its files are
   opened** — sherpa-onnx's C++ layer calls `_Exit()` when handed a model it
   cannot read: it does not return an error, it takes the whole process down,
-  and no Rust code can catch that. An offline model and a streaming one
-  install under the *same* four artifact names
-  (`encoder.onnx`/`decoder.onnx`/`joiner.onnx`/`tokens.txt`), so a perfectly
-  intact offline model handed to the streaming recognizer looks right until
-  the moment it is fatal. `runtime_boot`'s `wrong_model_kind` therefore
-  settles the question on catalog data alone — `ModelManager::engine_of`,
-  no filesystem — before anything else runs, on both the streaming and the
-  batch load path. This is distinct from the artifact size verification
-  introduced in v0.2 and deliberately runs before it: that check answers
+  and no Rust code can catch that. Several offline and streaming transducer
+  models install under the same encoder/decoder/joiner/tokens names, while
+  T-One requires a different two-file CTC configuration. `runtime_boot`
+  therefore settles both role and streaming family from typed catalog data,
+  never by guessing from an id or directory. A cross-crate test also checks
+  that each family's catalog artifact names exactly match the files its
+  native loader opens. These checks run before model creation on both the
+  streaming and batch paths. They are distinct from the artifact size
+  verification introduced in v0.2 and deliberately run before it: that check
+  answers
   "are these files intact" and guards against a truncated download, which is
   the other way to reach the same `_Exit()`. Neither check subsumes the
   other, because a model of the wrong kind is usually perfectly intact.

@@ -35,12 +35,17 @@ function model(
 }
 
 /** One entry per engine string the catalog uses (`crates/utter-store/src/models.rs`), so a
- * filter that matched the wrong one has somewhere wrong to land. The two streaming entries sit
- * on opposite sides of `installed` for the same reason. */
+ * filter that matched the wrong one has somewhere wrong to land. The streaming entries cover
+ * both installed states and both supported streaming families from the Rust catalog. */
 const CATALOG: ModelInfo[] = [
   model('small', 'whisper', true),
   model('parakeet-tdt-110m-en', 'sherpa', true, { supported_languages: ['en'] }),
   model('zipformer-ru-small', 'sherpa-streaming', true, { supported_languages: ['ru'] }),
+  model('t-one-ru', 'sherpa-streaming', true, {
+    supported_languages: ['ru'],
+    performance_class: 'balanced',
+    recommendation_tags: ['Accuracy-focused Russian preview', 'Live preview only'],
+  }),
   model('zipformer-en-small', 'sherpa-streaming', false, { supported_languages: ['en'] }),
 ]
 
@@ -51,6 +56,7 @@ describe('previewModels', () => {
     // engine) is exactly what the two distinct engine strings exist to prevent.
     expect(previewModels(CATALOG).map((m) => m.id)).toEqual([
       'zipformer-ru-small',
+      't-one-ru',
       'zipformer-en-small',
     ])
   })
@@ -105,6 +111,11 @@ describe('previewModelOptions', () => {
       {
         value: 'zipformer-ru-small',
         label: 'zipformer-ru-small label — Russian · Fast · Fixture fit',
+      },
+      {
+        value: 't-one-ru',
+        label:
+          't-one-ru label — Russian · Balanced · Accuracy-focused Russian preview · Live preview only',
       },
       {
         value: 'zipformer-en-small',

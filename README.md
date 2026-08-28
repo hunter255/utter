@@ -53,13 +53,14 @@ endpoint, a model download).
 - **Live preview** — optionally, a second streaming sherpa-onnx model runs
   alongside the engine above and shows words in the HUD while you are still
   speaking. It is a draft only: the text that actually gets inserted always
-  comes from the engine above, at the end of the utterance. The preview
-  models are small on purpose (27 MB Russian, 43 MB English) and get a single
-  inference thread, so they stay out of the way of the model whose output you
-  keep — the price is lower accuracy and no punctuation, which is why their
-  words never leave the HUD. Off by default, picked per profile, and a
-  preview model that is missing, damaged or fails mid-utterance leaves that
-  profile's preview dark without touching dictation.
+  comes from the engine above, at the end of the utterance. The 27 MB Russian
+  and 43 MB English Zipformer models prioritize low latency; the 138 MB T-One
+  CTC model is an accuracy-focused Russian alternative. T-One emits lowercase
+  Cyrillic without punctuation, digits, Latin text or dictionary biasing.
+  Preview inference has a small fixed CPU budget so it stays out of the way of
+  the final model. Preview is off by default and picked per profile; a model
+  that is missing, damaged or fails mid-utterance leaves that profile's HUD
+  preview dark without touching dictation.
 - **AI text refinement** — optional pass over the transcript: removes filler
   words, fixes punctuation and casing, applies a tone preset (`verbatim`,
   `clean`, `formal`, `notes`, `code-comment`). Works against any
@@ -271,15 +272,15 @@ rejected, so the format tolerates being hand-edited or partially upgraded.
   `model` blank, is the default and means no preview.
 - **Engines** — models download to `~/.local/share/utter/models` and are
   managed from the Engines page; which engine a profile actually uses is
-  chosen on the Profiles page. Four of the catalog's entries are sherpa-onnx
+  chosen on the Profiles page. Five of the catalog's entries are sherpa-onnx
   models, filed under two engine kinds: the offline models whose text is
   inserted (GigaAM-v3 for Russian, Parakeet TDT 110M for English) and the
-  streaming models that only drive the live preview (Zipformer Small, one per
-  language). There is one model per language in each kind, so a profile's
-  engine and preview should both match the language it dictates in. The two
-  kinds install under identical filenames, so a model catalogued under the
-  wrong kind is rejected on its catalog entry before any of its files are
-  opened.
+  streaming models that only drive the live preview (Zipformer Small for
+  Russian and English, plus T-One CTC for Russian). A profile's engine and
+  preview should both match the language it dictates in. Each streaming
+  catalog entry declares its native family: transducers install
+  encoder/decoder/joiner/tokens, while T-One installs model/tokens. The loader
+  validates that family before opening any native model files.
 - **Refinement** — point `refine.base_url` / `refine.model` at any
   OpenAI-compatible chat endpoint; the settings UI ships presets for OpenAI,
   Groq, OpenRouter, DeepSeek, and Ollama. For a fully local setup, run
@@ -336,4 +337,6 @@ including dev setup and test/lint gates, are in
 ## License
 
 Dual-licensed under [MIT](LICENSE-MIT) or [Apache 2.0](LICENSE-APACHE), at
-your option.
+your option. Notices for downloadable third-party model assets are in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md); the desktop bundle includes
+that notice and both project license texts.

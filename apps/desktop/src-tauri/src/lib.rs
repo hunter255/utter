@@ -273,6 +273,14 @@ mod tests {
 
         assert_eq!(config["identifier"], utter_store::APP_IDENTIFIER);
         assert_eq!(KEYRING_SERVICE, utter_store::APP_IDENTIFIER);
+        assert_eq!(
+            config["bundle"]["resources"]["../../../THIRD_PARTY_NOTICES.md"],
+            "licenses/THIRD_PARTY_NOTICES.md"
+        );
+        assert_eq!(
+            config["bundle"]["resources"]["../../../LICENSE-APACHE"],
+            "licenses/Apache-2.0.txt"
+        );
     }
 
     #[test]
