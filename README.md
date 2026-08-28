@@ -46,7 +46,10 @@ endpoint, a model download).
   size, and a warning when a profile language does not match the model. Large
   downloads can be cancelled without leaving a partial model installed; the
   next attempt resumes verified partial bytes, and a stalled connection ends
-  with a clear retry instead of waiting forever.
+  with a clear retry instead of waiting forever. If the primary Hugging Face
+  endpoint fails, catalogued Hugging Face artifacts can continue through
+  `hf-mirror.com`; Utter announces that fallback first and accepts the result
+  only when the original expected size and SHA-256 both match.
 - **Live preview** — optionally, a second streaming sherpa-onnx model runs
   alongside the engine above and shows words in the HUD while you are still
   speaking. It is a draft only: the text that actually gets inserted always

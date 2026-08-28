@@ -159,8 +159,25 @@ struct CatalogEntry {
     role: ModelRole,
     performance_class: PerformanceClass,
     recommendation_tags: &'static [&'static str],
+    /// Ordered, trusted endpoint substitutions. Every resulting source still
+    /// shares this entry's pinned size and SHA-256 contract.
+    mirrors: &'static [SourceMirror],
     artifacts: &'static [Artifact],
 }
+
+#[derive(Debug, Clone, Copy)]
+struct SourceMirror {
+    origin_prefix: &'static str,
+    mirror_prefix: &'static str,
+}
+
+/// HF-Mirror documents its endpoint as a drop-in replacement for the
+/// Hugging Face Hub endpoint. It remains a fallback only: the pinned catalog
+/// size and SHA-256, not the mirror, decide whether bytes may be installed.
+const HUGGING_FACE_MIRRORS: &[SourceMirror] = &[SourceMirror {
+    origin_prefix: "https://huggingface.co/",
+    mirror_prefix: "https://hf-mirror.com/",
+}];
 
 /// The hard-coded catalog of downloadable speech-to-text models.
 ///
@@ -185,6 +202,7 @@ const CATALOG: &[CatalogEntry] = &[
         role: ModelRole::Final,
         performance_class: PerformanceClass::Fast,
         recommendation_tags: &["Lowest latency", "Lower accuracy"],
+        mirrors: HUGGING_FACE_MIRRORS,
         artifacts: &[Artifact {
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
             sha256: "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
@@ -201,6 +219,7 @@ const CATALOG: &[CatalogEntry] = &[
         role: ModelRole::Final,
         performance_class: PerformanceClass::Fast,
         recommendation_tags: &["Lightweight", "Lower accuracy"],
+        mirrors: HUGGING_FACE_MIRRORS,
         artifacts: &[Artifact {
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
             sha256: "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
@@ -217,6 +236,7 @@ const CATALOG: &[CatalogEntry] = &[
         role: ModelRole::Final,
         performance_class: PerformanceClass::Balanced,
         recommendation_tags: &["Balanced multilingual"],
+        mirrors: HUGGING_FACE_MIRRORS,
         artifacts: &[Artifact {
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
             sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
@@ -233,6 +253,7 @@ const CATALOG: &[CatalogEntry] = &[
         role: ModelRole::Final,
         performance_class: PerformanceClass::Heavy,
         recommendation_tags: &["Higher accuracy"],
+        mirrors: HUGGING_FACE_MIRRORS,
         artifacts: &[Artifact {
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",
             sha256: "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208",
@@ -249,6 +270,7 @@ const CATALOG: &[CatalogEntry] = &[
         role: ModelRole::Final,
         performance_class: PerformanceClass::Balanced,
         recommendation_tags: &["High accuracy", "Mixed language"],
+        mirrors: HUGGING_FACE_MIRRORS,
         artifacts: &[Artifact {
             url:
                 "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
@@ -266,6 +288,7 @@ const CATALOG: &[CatalogEntry] = &[
         role: ModelRole::Final,
         performance_class: PerformanceClass::Heavy,
         recommendation_tags: &["Mixed Russian + English"],
+        mirrors: &[],
         artifacts: &[Artifact {
             url: "https://blob.handy.computer/breeze-asr-q5_k.bin",
             sha256: "8efbf0ce8a3f50fe332b7617da787fb81354b358c288b008d3bdef8359df64c6",
@@ -282,6 +305,7 @@ const CATALOG: &[CatalogEntry] = &[
         role: ModelRole::Final,
         performance_class: PerformanceClass::Heavy,
         recommendation_tags: &["Stable quality"],
+        mirrors: HUGGING_FACE_MIRRORS,
         artifacts: &[Artifact {
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/bf8b606c2fcd9173605cdf6bd2ac8a75a8141b6c/ggml-large-v2-q5_0.bin",
             sha256: "3a214837221e4530dbc1fe8d734f302af393eb30bd0ed046042ebf4baf70f6f2",
@@ -298,6 +322,7 @@ const CATALOG: &[CatalogEntry] = &[
         role: ModelRole::Final,
         performance_class: PerformanceClass::Fast,
         recommendation_tags: &["Recommended for Russian", "Punctuation included"],
+        mirrors: HUGGING_FACE_MIRRORS,
         artifacts: &[
             Artifact {
                 url: "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-transducer-punct-giga-am-v3-russian-2025-12-16/resolve/a6039be7cee829a9044a69ac0ebaf1c191217c97/encoder.int8.onnx",
@@ -334,6 +359,7 @@ const CATALOG: &[CatalogEntry] = &[
         role: ModelRole::Final,
         performance_class: PerformanceClass::Fast,
         recommendation_tags: &["Recommended for English", "Punctuation included"],
+        mirrors: HUGGING_FACE_MIRRORS,
         artifacts: &[
             Artifact {
                 url: "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet_tdt_transducer_110m-en-36000/resolve/e9bea5a06247dc3f55319ff23d34b0328f2f5ddf/encoder.onnx",
@@ -370,6 +396,7 @@ const CATALOG: &[CatalogEntry] = &[
         role: ModelRole::Preview,
         performance_class: PerformanceClass::Fast,
         recommendation_tags: &["Live preview only"],
+        mirrors: HUGGING_FACE_MIRRORS,
         artifacts: &[
             Artifact {
                 url: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-small-ru-vosk-int8-2025-08-16/resolve/31fa603e4f31279c6e1f7600fed13dc4312663ab/encoder.int8.onnx",
@@ -406,6 +433,7 @@ const CATALOG: &[CatalogEntry] = &[
         role: ModelRole::Preview,
         performance_class: PerformanceClass::Fast,
         recommendation_tags: &["Live preview only"],
+        mirrors: HUGGING_FACE_MIRRORS,
         artifacts: &[
             Artifact {
                 url: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17/resolve/d42f2d9f7ca24806fb667456a18a9f1b60f70d16/encoder-epoch-99-avg-1.int8.onnx",
@@ -567,6 +595,19 @@ impl ModelManager {
         cancellation: &DownloadCancellation,
         progress: &mut dyn FnMut(u64, u64),
     ) -> Result<PathBuf> {
+        self.download_with_cancellation_and_source(id, cancellation, &mut |_, _| {}, progress)
+    }
+
+    /// [`Self::download_with_cancellation`] plus a callback invoked before
+    /// each source attempt with its hostname and whether it is a fallback.
+    /// Hostnames are deliberately query-free and safe for UI notices/logs.
+    pub fn download_with_cancellation_and_source(
+        &self,
+        id: &str,
+        cancellation: &DownloadCancellation,
+        source: &mut dyn FnMut(&str, bool),
+        progress: &mut dyn FnMut(u64, u64),
+    ) -> Result<PathBuf> {
         let entry = *self
             .find(id)
             .ok_or_else(|| anyhow!("unknown model id: {id}"))?;
@@ -576,7 +617,7 @@ impl ModelManager {
         fs::create_dir_all(&models_dir)
             .with_context(|| format!("failed to create {}", models_dir.display()))?;
 
-        self.download_artifacts(id, &entry, &models_dir, cancellation, progress)
+        self.download_artifacts(id, &entry, &models_dir, cancellation, source, progress)
     }
 
     /// Downloads and verifies every artifact of `entry` into a staging
@@ -590,6 +631,7 @@ impl ModelManager {
         entry: &CatalogEntry,
         models_dir: &Path,
         cancellation: &DownloadCancellation,
+        source: &mut dyn FnMut(&str, bool),
         progress: &mut dyn FnMut(u64, u64),
     ) -> Result<PathBuf> {
         let Some((first, _)) = entry.artifacts.split_first() else {
@@ -621,9 +663,15 @@ impl ModelManager {
         for artifact in entry.artifacts {
             cancellation.check()?;
             let mut aggregate = |done: u64, _total: u64| progress(completed + done, grand_total);
-            if let Err(error) =
-                stage_one_artifact(id, artifact, &staging_dir, cancellation, &mut aggregate)
-            {
+            if let Err(error) = stage_one_artifact(
+                id,
+                artifact,
+                entry.mirrors,
+                &staging_dir,
+                cancellation,
+                source,
+                &mut aggregate,
+            ) {
                 // Remove only an empty directory. A transport failure or
                 // cancellation leaves a `.part`; previously verified
                 // artifacts of a multi-file model also remain resumable.
@@ -808,8 +856,10 @@ fn artifact_path(entry: &CatalogEntry, install_path: &Path, artifact: &Artifact)
 fn stage_one_artifact(
     id: &str,
     artifact: &Artifact,
+    mirrors: &[SourceMirror],
     staging_dir: &Path,
     cancellation: &DownloadCancellation,
+    source_changed: &mut dyn FnMut(&str, bool),
     progress: &mut dyn FnMut(u64, u64),
 ) -> Result<()> {
     let part_path = staging_dir.join(format!("{}.part", artifact.name));
@@ -843,30 +893,82 @@ fn stage_one_artifact(
         })?;
     }
 
-    let digest = stream_to_part_with_cancellation(
-        artifact.url,
-        &part_path,
-        artifact.size_bytes,
-        cancellation,
-        DOWNLOAD_TIMEOUTS,
-        progress,
-    )?;
-    if digest != artifact.sha256 {
-        let _ = fs::remove_file(&part_path);
-        bail!(
-            "checksum mismatch for model '{id}' artifact '{}': expected {}, got {digest}",
-            artifact.name,
-            artifact.sha256
+    let sources = download_sources(artifact.url, mirrors);
+    let mut last_error = None;
+    for (index, source_url) in sources.iter().enumerate() {
+        cancellation.check()?;
+        let source = source_label(source_url);
+        source_changed(&source, index > 0);
+        tracing::info!(source, fallback = index > 0, "downloading model artifact");
+
+        let result = stream_to_part_with_cancellation(
+            source_url,
+            &part_path,
+            artifact.size_bytes,
+            cancellation,
+            DOWNLOAD_TIMEOUTS,
+            progress,
         );
+        let error = match result {
+            Ok(digest) if digest == artifact.sha256 => {
+                cancellation.check()?;
+                return fs::rename(&part_path, &final_in_staging).with_context(|| {
+                    format!(
+                        "failed to move {} into {}",
+                        part_path.display(),
+                        final_in_staging.display()
+                    )
+                });
+            }
+            Ok(digest) => {
+                let _ = fs::remove_file(&part_path);
+                anyhow!(
+                    "checksum mismatch for model '{id}' artifact '{}': expected {}, got {digest}",
+                    artifact.name,
+                    artifact.sha256
+                )
+            }
+            Err(error) if error.downcast_ref::<DownloadCancelled>().is_some() => {
+                return Err(error);
+            }
+            // A different source cannot fix a local filesystem failure (for
+            // example a full disk or a read-only staging directory), and
+            // retrying would only repeat network work before the same error.
+            Err(error) if error.downcast_ref::<std::io::Error>().is_some() => {
+                return Err(error);
+            }
+            Err(error) => error,
+        };
+
+        if let Some(next_url) = sources.get(index + 1) {
+            tracing::warn!(
+                source,
+                next_source = source_label(next_url),
+                "model download source failed; trying fallback"
+            );
+        }
+        last_error = Some(error);
     }
 
-    fs::rename(&part_path, &final_in_staging).with_context(|| {
-        format!(
-            "failed to move {} into {}",
-            part_path.display(),
-            final_in_staging.display()
-        )
-    })
+    Err(last_error.unwrap_or_else(|| anyhow!("model artifact has no download sources")))
+}
+
+fn download_sources(origin: &str, mirrors: &[SourceMirror]) -> Vec<String> {
+    let mut sources = vec![origin.to_string()];
+    sources.extend(mirrors.iter().filter_map(|mirror| {
+        origin
+            .strip_prefix(mirror.origin_prefix)
+            .map(|suffix| format!("{}{suffix}", mirror.mirror_prefix))
+    }));
+    sources.dedup();
+    sources
+}
+
+fn source_label(url: &str) -> String {
+    reqwest::Url::parse(url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .unwrap_or_else(|| "configured source".to_string())
 }
 
 /// Streams the HTTP body at `url` into `part_path`, reporting progress against
@@ -960,6 +1062,7 @@ async fn stream_response_to_part(
     timeouts: DownloadTimeouts,
     progress: &mut dyn FnMut(u64, u64),
 ) -> Result<String> {
+    let source = source_label(url);
     let client = reqwest::Client::builder()
         .connect_timeout(timeouts.connect)
         .build()
@@ -979,7 +1082,7 @@ async fn stream_response_to_part(
     let mut response = loop {
         tokio::select! {
             result = &mut send => {
-                break result.with_context(|| format!("failed to request {url}"))?;
+                break result.with_context(|| format!("failed to request model from {source}"))?;
             }
             _ = &mut response_deadline => {
                 bail!("model download server did not respond within {:?}", timeouts.connect);
@@ -993,7 +1096,7 @@ async fn stream_response_to_part(
     let mut append = resume_from > 0;
     if resume_from == 0 {
         if status != StatusCode::OK {
-            bail!("download of {url} failed with status {status}");
+            bail!("download from {source} failed with status {status}");
         }
     } else if status == StatusCode::PARTIAL_CONTENT {
         let content_range = response
@@ -1009,7 +1112,7 @@ async fn stream_response_to_part(
         }
     } else if status == StatusCode::OK {
         tracing::info!(
-            url,
+            source,
             "server ignored Range; restarting artifact from byte zero"
         );
         append = false;
@@ -1030,7 +1133,7 @@ async fn stream_response_to_part(
             }
         }
     } else {
-        bail!("download of {url} failed with status {status}; retry to resume");
+        bail!("download from {source} failed with status {status}; retry to resume");
     }
 
     let mut file = if append {
@@ -1191,7 +1294,20 @@ mod tests {
         Box::leak(artifacts.into_boxed_slice())
     }
 
+    fn leak_mirrors(mirrors: Vec<SourceMirror>) -> &'static [SourceMirror] {
+        Box::leak(mirrors.into_boxed_slice())
+    }
+
     fn whisper_entry(url: String, sha256: String, size_bytes: u64) -> CatalogEntry {
+        whisper_entry_with_mirrors(url, sha256, size_bytes, &[])
+    }
+
+    fn whisper_entry_with_mirrors(
+        url: String,
+        sha256: String,
+        size_bytes: u64,
+        mirrors: &'static [SourceMirror],
+    ) -> CatalogEntry {
         CatalogEntry {
             id: "test-whisper",
             engine: "whisper",
@@ -1201,6 +1317,7 @@ mod tests {
             role: ModelRole::Final,
             performance_class: PerformanceClass::Fast,
             recommendation_tags: &["Test model"],
+            mirrors,
             artifacts: leak_artifacts(vec![Artifact {
                 url: Box::leak(url.into_boxed_str()),
                 sha256: Box::leak(sha256.into_boxed_str()),
@@ -1226,6 +1343,7 @@ mod tests {
             role: ModelRole::Final,
             performance_class: PerformanceClass::Fast,
             recommendation_tags: &["Test model"],
+            mirrors: &[],
             artifacts: &[
                 Artifact {
                     url: "unused",
@@ -1260,6 +1378,7 @@ mod tests {
             role: ModelRole::Final,
             performance_class: PerformanceClass::Fast,
             recommendation_tags: &["Test model"],
+            mirrors: &[],
             artifacts: leak_artifacts(vec![
                 Artifact {
                     url: Box::leak(encoder_url.into_boxed_str()),
@@ -1440,6 +1559,168 @@ mod tests {
             requests.len(),
             1,
             "the second artifact must not be requested"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn origin_failure_falls_back_to_a_verified_mirror() {
+        let origin = MockServer::start().await;
+        let mirror = MockServer::start().await;
+        let body = vec![0x2au8; 12_000];
+        Mock::given(method("GET"))
+            .and(path("/ggml-test.bin"))
+            .respond_with(ResponseTemplate::new(503))
+            .expect(1)
+            .mount(&origin)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/ggml-test.bin"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(body.clone()))
+            .expect(1)
+            .mount(&mirror)
+            .await;
+
+        let origin_prefix = Box::leak(format!("{}/", origin.uri()).into_boxed_str());
+        let mirror_prefix = Box::leak(format!("{}/", mirror.uri()).into_boxed_str());
+        let mirrors = leak_mirrors(vec![SourceMirror {
+            origin_prefix,
+            mirror_prefix,
+        }]);
+        let entry = whisper_entry_with_mirrors(
+            format!("{}ggml-test.bin", origin_prefix),
+            sha256_hex(&body),
+            body.len() as u64,
+            mirrors,
+        );
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manager = ModelManager::with_catalog(dir.path().to_path_buf(), vec![entry]);
+
+        let (installed, sources) = tokio::task::spawn_blocking(move || {
+            let mut sources = Vec::new();
+            let installed = manager
+                .download_with_cancellation_and_source(
+                    "test-whisper",
+                    &DownloadCancellation::default(),
+                    &mut |host, fallback| sources.push((host.to_string(), fallback)),
+                    &mut |_, _| {},
+                )
+                .expect("mirror should install");
+            (installed, sources)
+        })
+        .await
+        .expect("blocking task panicked");
+
+        assert_eq!(fs::read(installed).expect("installed bytes"), body);
+        assert_eq!(sources.len(), 2);
+        assert!(!sources[0].1);
+        assert!(sources[1].1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn mirror_with_wrong_hash_never_installs() {
+        let origin = MockServer::start().await;
+        let mirror = MockServer::start().await;
+        let expected = vec![0x3au8; 8_000];
+        let wrong = vec![0x3bu8; expected.len()];
+        Mock::given(method("GET"))
+            .and(path("/ggml-test.bin"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&origin)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/ggml-test.bin"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(wrong))
+            .mount(&mirror)
+            .await;
+
+        let origin_prefix = Box::leak(format!("{}/", origin.uri()).into_boxed_str());
+        let mirror_prefix = Box::leak(format!("{}/", mirror.uri()).into_boxed_str());
+        let mirrors = leak_mirrors(vec![SourceMirror {
+            origin_prefix,
+            mirror_prefix,
+        }]);
+        let entry = whisper_entry_with_mirrors(
+            format!("{}ggml-test.bin", origin_prefix),
+            sha256_hex(&expected),
+            expected.len() as u64,
+            mirrors,
+        );
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manager = ModelManager::with_catalog(dir.path().to_path_buf(), vec![entry]);
+
+        let error = tokio::task::spawn_blocking(move || {
+            manager
+                .download("test-whisper", &mut |_, _| {})
+                .expect_err("wrong mirror bytes must fail")
+        })
+        .await
+        .expect("blocking task panicked");
+
+        assert!(error.to_string().contains("checksum mismatch"));
+        assert!(!dir.path().join("models/ggml-test.bin").exists());
+        assert!(!dir
+            .path()
+            .join("models/test-whisper.staging/ggml-test.bin.part")
+            .exists());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cancellation_stops_before_the_fallback_request() {
+        let origin = MockServer::start().await;
+        let mirror = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/ggml-test.bin"))
+            .respond_with(ResponseTemplate::new(503))
+            .expect(1)
+            .mount(&origin)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/ggml-test.bin"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![0x4au8; 100]))
+            .expect(0)
+            .mount(&mirror)
+            .await;
+
+        let origin_prefix = Box::leak(format!("{}/", origin.uri()).into_boxed_str());
+        let mirror_prefix = Box::leak(format!("{}/", mirror.uri()).into_boxed_str());
+        let mirrors = leak_mirrors(vec![SourceMirror {
+            origin_prefix,
+            mirror_prefix,
+        }]);
+        let entry = whisper_entry_with_mirrors(
+            format!("{}ggml-test.bin", origin_prefix),
+            "unused".to_string(),
+            100,
+            mirrors,
+        );
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manager = ModelManager::with_catalog(dir.path().to_path_buf(), vec![entry]);
+        let cancellation = DownloadCancellation::default();
+        let callback_cancellation = cancellation.clone();
+
+        let result = tokio::task::spawn_blocking(move || {
+            manager.download_with_cancellation_and_source(
+                "test-whisper",
+                &cancellation,
+                &mut |_, fallback| {
+                    if fallback {
+                        callback_cancellation.cancel();
+                    }
+                },
+                &mut |_, _| {},
+            )
+        })
+        .await
+        .expect("blocking task panicked");
+
+        assert_cancelled(&result);
+    }
+
+    #[test]
+    fn source_labels_never_expose_paths_or_query_secrets() {
+        assert_eq!(
+            source_label("https://mirror.example/models/file?token=secret"),
+            "mirror.example"
         );
     }
 
@@ -2160,6 +2441,47 @@ mod tests {
                     entry.id,
                     artifact.name
                 );
+                assert!(
+                    artifact.size_bytes > 0,
+                    "{}: {} has no size",
+                    entry.id,
+                    artifact.name
+                );
+                for mirror in entry.mirrors {
+                    assert!(
+                        mirror.origin_prefix.starts_with("https://")
+                            && mirror.mirror_prefix.starts_with("https://"),
+                        "{} has a non-HTTPS mirror mapping",
+                        entry.id
+                    );
+                    assert!(
+                        !mirror.mirror_prefix.contains(['?', '#']),
+                        "{} has secrets or fragments in mirror metadata",
+                        entry.id
+                    );
+                    assert!(
+                        artifact.url.starts_with(mirror.origin_prefix),
+                        "{}: {} cannot apply its declared mirror",
+                        entry.id,
+                        artifact.name
+                    );
+                    assert_ne!(mirror.origin_prefix, mirror.mirror_prefix);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn production_hugging_face_artifacts_have_an_ordered_fallback() {
+        for entry in CATALOG {
+            for artifact in entry.artifacts {
+                let sources = download_sources(artifact.url, entry.mirrors);
+                if artifact.url.starts_with("https://huggingface.co/") {
+                    assert_eq!(sources.len(), 2, "{}: {}", entry.id, artifact.name);
+                    assert!(sources[1].starts_with("https://hf-mirror.com/"));
+                } else {
+                    assert_eq!(sources, vec![artifact.url.to_string()]);
+                }
             }
         }
     }

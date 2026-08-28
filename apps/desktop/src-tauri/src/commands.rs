@@ -204,6 +204,7 @@ pub async fn download_model(app: AppHandle, id: String) -> Result<ModelDownloadO
     };
 
     let progress_app = app.clone();
+    let fallback_app = app.clone();
     let progress_id = id.clone();
     let download_id = id.clone();
 
@@ -212,29 +213,45 @@ pub async fn download_model(app: AppHandle, id: String) -> Result<ModelDownloadO
         let _lease = lease;
         let mut last_emitted_done = 0u64;
         let mut last_emit_at = Instant::now();
+        let mut fallback_announced = false;
 
-        models.download_with_cancellation(&download_id, &cancellation, &mut |done, total| {
-            let now = Instant::now();
-            if should_emit_progress(
-                done,
-                total,
-                last_emitted_done,
-                now.duration_since(last_emit_at),
-                PROGRESS_MIN_INTERVAL,
-                PROGRESS_MIN_PERCENT_STEP,
-            ) {
-                last_emitted_done = done;
-                last_emit_at = now;
-                let _ = progress_app.emit(
-                    "model-progress",
-                    ModelProgress {
-                        id: progress_id.clone(),
-                        done,
-                        total,
-                    },
-                );
-            }
-        })
+        models.download_with_cancellation_and_source(
+            &download_id,
+            &cancellation,
+            &mut |source, fallback| {
+                if fallback && !fallback_announced {
+                    fallback_announced = true;
+                    crate::sink::notify_info(
+                        &fallback_app,
+                        &format!(
+                            "Primary model source is unavailable. Continuing the verified download through {source}."
+                        ),
+                    );
+                }
+            },
+            &mut |done, total| {
+                let now = Instant::now();
+                if should_emit_progress(
+                    done,
+                    total,
+                    last_emitted_done,
+                    now.duration_since(last_emit_at),
+                    PROGRESS_MIN_INTERVAL,
+                    PROGRESS_MIN_PERCENT_STEP,
+                ) {
+                    last_emitted_done = done;
+                    last_emit_at = now;
+                    let _ = progress_app.emit(
+                        "model-progress",
+                        ModelProgress {
+                            id: progress_id.clone(),
+                            done,
+                            total,
+                        },
+                    );
+                }
+            },
+        )
     })
     .await
     .map_err(|e| format!("download task failed to run: {e}"))?;
@@ -249,7 +266,7 @@ pub async fn download_model(app: AppHandle, id: String) -> Result<ModelDownloadO
 }
 
 /// Requests cooperative cancellation; `download_model` resolves only after
-/// the blocking worker has removed its staging files.
+/// the blocking worker has stopped safely; resumable staging may remain.
 #[tauri::command]
 pub fn cancel_model_download(id: String, state: State<AppState>) -> Result<(), String> {
     state.model_operations.cancel_download(&id).map(|_| ())
