@@ -375,6 +375,9 @@ fn whisper_decode_config(model_id: &str) -> WhisperDecodeConfig {
     match model_id {
         "large-v3-turbo-q5_0" => WhisperDecodeConfig::anti_hallucination(),
         "breeze-asr-25-q5_k" => WhisperDecodeConfig::breeze(),
+        // The benchmark found the Turbo anti-hallucination thresholds hurt
+        // Large v2, so it gets context only.
+        "large-v2-q5_0" => WhisperDecodeConfig::contextual(),
         _ => WhisperDecodeConfig::default(),
     }
 }
@@ -1065,6 +1068,11 @@ mod tests {
         assert_eq!(
             whisper_decode_config("breeze-asr-25-q5_k"),
             WhisperDecodeConfig::breeze()
+        );
+        assert_eq!(
+            whisper_decode_config("large-v2-q5_0"),
+            WhisperDecodeConfig::contextual(),
+            "Large v2 must not inherit Turbo's anti-hallucination thresholds"
         );
     }
 
