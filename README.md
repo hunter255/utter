@@ -146,7 +146,9 @@ Prebuilt packages are on the
 provide `.deb` and AppImage packages. macOS releases provide a signed and
 notarized DMG for Apple Silicon (macOS 13 or newer) with Whisper Metal enabled.
 They bundle the sherpa-onnx engine, so the offline models the default profile
-uses work without any extra setup.
+uses work without any extra setup. Signed builds can check, download and
+install a cryptographically verified update from Settings > Advanced; the app
+restarts only after the user confirms installation.
 
 They are built on Ubuntu 22.04 and need **glibc 2.35 or newer** — Ubuntu
 22.04+, Debian 12+, Fedora 37+. On anything older, build from source.

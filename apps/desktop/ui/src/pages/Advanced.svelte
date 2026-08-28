@@ -12,6 +12,8 @@
     InjectionPreference,
     PermissionStatus,
     PlatformCapabilities,
+    UpdateCheck,
+    UpdateProgressPayload,
   } from '../lib/types'
 
   interface Props {
@@ -56,6 +58,16 @@
   let diagnosticsBusy = $state<'open' | 'copy' | null>(null)
   let diagnosticsMessage = $state('')
   let diagnosticsError = $state('')
+  let updaterBusy = $state<'check' | 'install' | null>(null)
+  let updateCheck = $state<UpdateCheck | null>(null)
+  let updateProgress = $state<UpdateProgressPayload | null>(null)
+  let updateMessage = $state('')
+  let updateError = $state('')
+  let updatePercent = $derived.by(() => {
+    const progress = updateProgress
+    if (progress?.event !== 'progress' || !progress.total) return null
+    return Math.min(100, Math.round((progress.downloaded / progress.total) * 100))
+  })
 
   async function refreshMicrophonePermission() {
     if (capabilities.os !== 'macos') return
@@ -116,12 +128,64 @@
     }
   }
 
-  onMount(async () => {
-    void refreshMicrophonePermission()
+  async function checkForUpdate() {
+    updaterBusy = 'check'
+    updateError = ''
+    updateMessage = ''
+    updateProgress = null
     try {
-      devices = await api.listDevices()
+      updateCheck = await api.checkForUpdate()
+      updateMessage = updateCheck.update
+        ? `Utter ${updateCheck.update.version} is ready to install.`
+        : `Utter ${updateCheck.current_version} is up to date.`
     } catch (err) {
-      devicesError = String(err)
+      updateError = String(err)
+    } finally {
+      updaterBusy = null
+    }
+  }
+
+  async function installUpdate() {
+    if (!updateCheck?.update) return
+    updaterBusy = 'install'
+    updateError = ''
+    updateMessage = 'Downloading the signed update…'
+    updateProgress = null
+    try {
+      await api.installUpdate()
+      updateMessage = 'Update installed. Restarting…'
+    } catch (err) {
+      updateError = String(err)
+    } finally {
+      updaterBusy = null
+    }
+  }
+
+  onMount(() => {
+    let disposed = false
+    let unlistenUpdate: (() => void) | undefined
+
+    if (capabilities.updater) {
+      void api
+        .onUpdateProgress((progress) => (updateProgress = progress))
+        .then((unlisten) => {
+          if (disposed) unlisten()
+          else unlistenUpdate = unlisten
+        })
+        .catch((err) => {
+          if (!disposed) updateError = String(err)
+        })
+    }
+
+    void refreshMicrophonePermission()
+    void api
+      .listDevices()
+      .then((available) => (devices = available))
+      .catch((err) => (devicesError = String(err)))
+
+    return () => {
+      disposed = true
+      unlistenUpdate?.()
     }
   })
 
@@ -247,6 +311,43 @@
     />
   </Field>
   <Field
+    label="Updates"
+    hint="Release builds verify the manifest and archive signature before replacing the application. Updates are never forced."
+  >
+    {#if capabilities.updater}
+      <button type="button" onclick={checkForUpdate} disabled={updaterBusy !== null}>
+        {updaterBusy === 'check' ? 'Checking…' : 'Check for updates'}
+      </button>
+      {#if updateCheck?.update}
+        <div class="update-card">
+          <p>
+            <strong>Utter {updateCheck.update.version}</strong>
+            <span class="muted">Installed: {updateCheck.current_version}</span>
+          </p>
+          {#if updateCheck.update.notes}
+            <p class="update-notes">{updateCheck.update.notes}</p>
+          {/if}
+          <button type="button" onclick={installUpdate} disabled={updaterBusy !== null}>
+            {updaterBusy === 'install' ? 'Installing…' : 'Install and restart'}
+          </button>
+        </div>
+      {/if}
+      {#if updaterBusy === 'install'}
+        <progress max="100" value={updatePercent ?? undefined}></progress>
+        <p class="muted">
+          {updatePercent === null ? 'Downloading…' : `Downloaded ${updatePercent}%`}
+        </p>
+      {/if}
+      {#if updateError}
+        <p class="error">{updateError}</p>
+      {:else if updateMessage}
+        <p class="ok">{updateMessage}</p>
+      {/if}
+    {:else}
+      <p class="muted">Update checks are available in signed release builds.</p>
+    {/if}
+  </Field>
+  <Field
     label="Diagnostics"
     hint="The report excludes API keys, transcripts, prompts, dictionary terms, endpoints, and personal paths. Nothing is sent automatically."
   >
@@ -290,6 +391,29 @@
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-2);
+  }
+
+  .update-card {
+    display: grid;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+  }
+
+  .update-card p {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin: 0;
+  }
+
+  .update-notes {
+    white-space: pre-wrap;
+  }
+
+  progress {
+    width: min(100%, 360px);
   }
 
 </style>

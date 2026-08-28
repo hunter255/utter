@@ -116,6 +116,14 @@ describe('api command wrappers', () => {
     expect(mockInvoke).toHaveBeenCalledWith('copy_diagnostics')
   })
 
+  it('checkForUpdate and installUpdate invoke the serialized backend operations', async () => {
+    await api.checkForUpdate()
+    expect(mockInvoke).toHaveBeenCalledWith('check_for_update')
+
+    await api.installUpdate()
+    expect(mockInvoke).toHaveBeenCalledWith('install_update')
+  })
+
   it('platformCapabilities -> platform_capabilities', async () => {
     await api.platformCapabilities()
     expect(mockInvoke).toHaveBeenCalledWith('platform_capabilities')
@@ -138,6 +146,15 @@ describe('api command wrappers', () => {
     const listenerCallback = mockListen.mock.calls[0][1] as (event: { payload: unknown }) => void
     listenerCallback({ payload: { id: 'small', done: 1, total: 2 } })
     expect(handler).toHaveBeenCalledWith({ id: 'small', done: 1, total: 2 })
+  })
+
+  it('onUpdateProgress listens on "update-progress" and unwraps the payload', async () => {
+    const handler = vi.fn()
+    await api.onUpdateProgress(handler)
+    expect(mockListen).toHaveBeenCalledWith('update-progress', expect.any(Function))
+    const listenerCallback = mockListen.mock.calls[0][1] as (event: { payload: unknown }) => void
+    listenerCallback({ payload: { event: 'progress', downloaded: 1, total: 2 } })
+    expect(handler).toHaveBeenCalledWith({ event: 'progress', downloaded: 1, total: 2 })
   })
 
   it('takePendingNotices -> take_pending_notices with no args', async () => {

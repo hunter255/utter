@@ -29,6 +29,8 @@ import type {
   PermissionKind,
   PlatformCapabilities,
   Settings,
+  UpdateCheck,
+  UpdateProgressPayload,
 } from './types'
 
 export function getSettings(): Promise<Settings> {
@@ -100,6 +102,15 @@ export function copyDiagnostics(): Promise<string> {
   return invoke('copy_diagnostics')
 }
 
+export function checkForUpdate(): Promise<UpdateCheck> {
+  return invoke('check_for_update')
+}
+
+/** Installs the pending verified release and restarts the application. */
+export function installUpdate(): Promise<void> {
+  return invoke('install_update')
+}
+
 export function platformCapabilities(): Promise<PlatformCapabilities> {
   return invoke('platform_capabilities')
 }
@@ -126,6 +137,12 @@ export function onModelProgress(
   handler: (payload: ModelProgressPayload) => void,
 ): Promise<UnlistenFn> {
   return listen<ModelProgressPayload>('model-progress', (event) => handler(event.payload))
+}
+
+export function onUpdateProgress(
+  handler: (payload: UpdateProgressPayload) => void,
+): Promise<UnlistenFn> {
+  return listen<UpdateProgressPayload>('update-progress', (event) => handler(event.payload))
 }
 
 export function onDictationState(
