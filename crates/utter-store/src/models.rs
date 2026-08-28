@@ -76,8 +76,11 @@ struct CatalogEntry {
 
 /// The hard-coded catalog of downloadable speech-to-text models.
 ///
-/// Whisper sha256 and size_bytes values were read from the Hugging Face tree
-/// API for `ggerganov/whisper.cpp` (`lfs.oid` and `size` per file).
+/// Official Whisper sha256 and size_bytes values were read from the Hugging
+/// Face tree API for `ggerganov/whisper.cpp` (`lfs.oid` and `size` per file).
+/// Breeze-ASR-25 uses the exact artifact published by Handy; its checksum was
+/// verified from a complete download and its byte length against the origin's
+/// `Content-Length`.
 /// Sherpa-onnx sha256 and size_bytes values were read from the Hugging Face
 /// tree API for each model's repository at the pinned revision in its
 /// artifact URLs — except `tokens.txt`, which none of these repositories
@@ -144,6 +147,18 @@ const CATALOG: &[CatalogEntry] = &[
             sha256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
             name: "ggml-large-v3-turbo-q5_0.bin",
             size_bytes: 574_041_195,
+        }],
+    },
+    CatalogEntry {
+        id: "breeze-asr-25-q5_k",
+        engine: "whisper",
+        label: "Breeze-ASR-25 (q5_k, Russian + English)",
+        size_mb: 1030,
+        artifacts: &[Artifact {
+            url: "https://blob.handy.computer/breeze-asr-q5_k.bin",
+            sha256: "8efbf0ce8a3f50fe332b7617da787fb81354b358c288b008d3bdef8359df64c6",
+            name: "breeze-asr-q5_k.bin",
+            size_bytes: 1_080_732_108,
         }],
     },
     CatalogEntry {
@@ -1220,6 +1235,24 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn breeze_catalog_entry_pins_the_benchmarked_artifact() {
+        let entry = CATALOG
+            .iter()
+            .find(|entry| entry.id == "breeze-asr-25-q5_k")
+            .expect("Breeze must be in the catalog");
+
+        assert_eq!(entry.engine, "whisper");
+        assert_eq!(entry.artifacts.len(), 1);
+        let artifact = &entry.artifacts[0];
+        assert_eq!(artifact.name, "breeze-asr-q5_k.bin");
+        assert_eq!(artifact.size_bytes, 1_080_732_108);
+        assert_eq!(
+            artifact.sha256,
+            "8efbf0ce8a3f50fe332b7617da787fb81354b358c288b008d3bdef8359df64c6"
+        );
     }
 
     #[test]

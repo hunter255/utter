@@ -61,7 +61,7 @@ fn recommended_prompt(profile: &LanguageProfile) -> Option<&'static str> {
         // Turbo punctuation and also wins for full-precision Medium.
         "large-v3-turbo-q5_0" | "medium" => Some(BILINGUAL_EXAMPLE),
         // Breeze responds best to a direct bilingual instruction.
-        "breeze-asr-25-q5_k_m" => Some(BILINGUAL_INSTRUCTION),
+        "breeze-asr-25-q5_k" => Some(BILINGUAL_INSTRUCTION),
         // Stable Large v2 needs only a natural punctuation seed.
         "large-v2-q5_0" => Some(PUNCTUATED_RUSSIAN),
         _ => None,
@@ -110,7 +110,7 @@ mod tests {
             Some(BILINGUAL_EXAMPLE)
         );
         assert_eq!(
-            recommended_prompt(&whisper_profile("breeze-asr-25-q5_k_m")),
+            recommended_prompt(&whisper_profile("breeze-asr-25-q5_k")),
             Some(BILINGUAL_INSTRUCTION)
         );
         assert_eq!(

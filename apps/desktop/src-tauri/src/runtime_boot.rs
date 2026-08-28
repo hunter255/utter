@@ -374,6 +374,7 @@ fn build_whisper(model_id: &str, models: &ModelManager) -> (Box<dyn SttEngine>, 
 fn whisper_decode_config(model_id: &str) -> WhisperDecodeConfig {
     match model_id {
         "large-v3-turbo-q5_0" => WhisperDecodeConfig::anti_hallucination(),
+        "breeze-asr-25-q5_k" => WhisperDecodeConfig::breeze(),
         _ => WhisperDecodeConfig::default(),
     }
 }
@@ -1047,7 +1048,7 @@ mod tests {
     }
 
     #[test]
-    fn only_benchmarked_turbo_uses_the_anti_hallucination_recipe() {
+    fn only_benchmarked_model_ids_get_explicit_decode_recipes() {
         assert_eq!(
             whisper_decode_config("large-v3-turbo-q5_0"),
             WhisperDecodeConfig::anti_hallucination()
@@ -1060,6 +1061,10 @@ mod tests {
         assert_eq!(
             whisper_decode_config("future-model"),
             WhisperDecodeConfig::default()
+        );
+        assert_eq!(
+            whisper_decode_config("breeze-asr-25-q5_k"),
+            WhisperDecodeConfig::breeze()
         );
     }
 
