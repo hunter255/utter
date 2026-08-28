@@ -555,18 +555,20 @@ pub(crate) fn build_draft_engine(
     build_streaming_draft(model_id, models, dictionary_terms)
 }
 
-/// The number of onnxruntime inference threads the draft engine gets:
-/// exactly one, deliberately *not* [`sherpa_thread_count`].
+/// The small, fixed onnxruntime inference budget for the draft engine,
+/// deliberately *not* [`sherpa_thread_count`].
 ///
-/// The draft engine decodes concurrently with the final engine on the same
-/// machine, so its threads come out of the same pool. Benchmarking on the
-/// target hardware put the final engine's latency optimum at 4 threads of 6,
-/// with the oversubscription of running both at that width costing 18%. A
-/// small int8 streaming model keeps up on a single thread, and staying out of
-/// the final engine's way is the entire point of it: the preview is a
-/// courtesy, the injected text is not.
+/// Two threads are the measured optimum on Apple Silicon: on an M4, the
+/// Russian Zipformer preview's total decode time fell from 207 ms to 154 ms
+/// and its per-feed p95 from 11.9 ms to 9.0 ms; four threads regressed. Keep
+/// the existing single-thread budget on Intel Macs and every other platform
+/// until they are benchmarked too.
 #[cfg(feature = "sherpa")]
-const DRAFT_THREADS: usize = 1;
+const DRAFT_THREADS: usize = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+    2
+} else {
+    1
+};
 
 /// The [`utter_stt::SherpaConfig`] every draft engine is loaded with.
 ///
@@ -1262,34 +1264,36 @@ mod tests {
         }
     }
 
-    /// The draft engine is loaded on exactly one inference thread, never on
-    /// [`sherpa_thread_count`] like the final engine.
+    /// The draft engine gets its small platform-specific inference budget,
+    /// never [`sherpa_thread_count`] like the final engine.
     ///
     /// Nothing downstream of here can be observed from a test — the number's
     /// only other reader is onnxruntime — so this is asserted at the last
     /// point it is still visible, [`draft_sherpa_config`], which is the sole
     /// construction site of a draft `SherpaConfig`. Without it the constant
     /// is pinned by nothing at all: swapping it for `sherpa_thread_count()`
-    /// leaves the whole suite green while reintroducing the 18% latency cost
-    /// of the two engines oversubscribing the same cores, which only shows up
-    /// on a stopwatch.
+    /// leaves the whole suite green while letting a courtesy preview consume
+    /// the final engine's full CPU budget; that hurts desktop responsiveness
+    /// and only shows up on a stopwatch.
     ///
-    /// Asserting the literal `1` rather than "less than the final engine's"
-    /// is deliberate: on a single-core machine the two are equal and the
-    /// difference is unassertable, but on such a machine there is also no
-    /// oversubscription to prevent, so the invariant worth stating is the
-    /// absolute one. The hotwords assertion rides along because a config
-    /// helper that forgot to forward them would silently cost the preview its
-    /// dictionary biasing.
+    /// The absolute platform value is asserted rather than merely checking
+    /// that it is smaller than the final engine's budget: that weaker check
+    /// would not pin the measured Apple Silicon value. The hotwords assertion
+    /// rides along because a config helper that forgot to forward them would
+    /// silently cost the preview its dictionary biasing.
     #[cfg(feature = "sherpa")]
     #[test]
-    fn the_draft_engine_is_configured_for_a_single_inference_thread() {
+    fn the_draft_engine_uses_the_benchmarked_platform_thread_budget() {
         let cfg = draft_sherpa_config(&["Kubernetes".to_string()]);
 
+        let expected = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            2
+        } else {
+            1
+        };
         assert_eq!(
-            cfg.num_threads, 1,
-            "the draft engine runs concurrently with the final one and must stay out of its \
-             way; see DRAFT_THREADS"
+            cfg.num_threads, expected,
+            "the draft engine must keep the benchmarked platform budget; see DRAFT_THREADS"
         );
         assert_eq!(
             cfg.hotwords,
