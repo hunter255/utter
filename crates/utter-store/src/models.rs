@@ -162,6 +162,18 @@ const CATALOG: &[CatalogEntry] = &[
         }],
     },
     CatalogEntry {
+        id: "large-v2-q5_0",
+        engine: "whisper",
+        label: "Whisper Large v2 (q5_0)",
+        size_mb: 1030,
+        artifacts: &[Artifact {
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/bf8b606c2fcd9173605cdf6bd2ac8a75a8141b6c/ggml-large-v2-q5_0.bin",
+            sha256: "3a214837221e4530dbc1fe8d734f302af393eb30bd0ed046042ebf4baf70f6f2",
+            name: "ggml-large-v2-q5_0.bin",
+            size_bytes: 1_080_732_091,
+        }],
+    },
+    CatalogEntry {
         id: "gigaam-v3-e2e-rnnt",
         engine: "sherpa",
         label: "GigaAM-v3 (Russian)",
@@ -1252,6 +1264,27 @@ mod tests {
         assert_eq!(
             artifact.sha256,
             "8efbf0ce8a3f50fe332b7617da787fb81354b358c288b008d3bdef8359df64c6"
+        );
+    }
+
+    #[test]
+    fn large_v2_catalog_entry_pins_the_official_q5_artifact() {
+        let entry = CATALOG
+            .iter()
+            .find(|entry| entry.id == "large-v2-q5_0")
+            .expect("Large v2 must be in the catalog");
+
+        assert_eq!(entry.engine, "whisper");
+        assert_eq!(entry.artifacts.len(), 1);
+        let artifact = &entry.artifacts[0];
+        assert!(artifact
+            .url
+            .contains("/bf8b606c2fcd9173605cdf6bd2ac8a75a8141b6c/"));
+        assert_eq!(artifact.name, "ggml-large-v2-q5_0.bin");
+        assert_eq!(artifact.size_bytes, 1_080_732_091);
+        assert_eq!(
+            artifact.sha256,
+            "3a214837221e4530dbc1fe8d734f302af393eb30bd0ed046042ebf4baf70f6f2"
         );
     }
 
