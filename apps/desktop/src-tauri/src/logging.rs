@@ -88,7 +88,7 @@ impl SafeLogWriter {
     }
 
     fn emit(&mut self, bytes: &[u8]) {
-        let safe = redact(&String::from_utf8_lossy(bytes), self.home.as_deref());
+        let safe = redact_with_home(&String::from_utf8_lossy(bytes), self.home.as_deref());
         let write_failed = self
             .file
             .as_mut()
@@ -226,7 +226,14 @@ fn user_home() -> Option<String> {
         .filter(|path| !path.is_empty())
 }
 
-fn redact(line: &str, home: Option<&str>) -> String {
+/// Applies the same defense-in-depth pass when persisted lines are copied
+/// into a diagnostic report.
+pub(crate) fn redact(line: &str) -> String {
+    let home = user_home();
+    redact_with_home(line, home.as_deref())
+}
+
+fn redact_with_home(line: &str, home: Option<&str>) -> String {
     let without_query = URL_QUERY.replace_all(line, "$1?[REDACTED]");
     let without_credentials = CREDENTIAL.replace_all(&without_query, "$1[REDACTED]");
     match home {

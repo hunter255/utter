@@ -106,6 +106,16 @@ describe('api command wrappers', () => {
     })
   })
 
+  it('openLogs -> open_logs', async () => {
+    await api.openLogs()
+    expect(mockInvoke).toHaveBeenCalledWith('open_logs')
+  })
+
+  it('copyDiagnostics -> copy_diagnostics', async () => {
+    await api.copyDiagnostics()
+    expect(mockInvoke).toHaveBeenCalledWith('copy_diagnostics')
+  })
+
   it('platformCapabilities -> platform_capabilities', async () => {
     await api.platformCapabilities()
     expect(mockInvoke).toHaveBeenCalledWith('platform_capabilities')

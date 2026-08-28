@@ -466,6 +466,31 @@ pub async fn open_permission_settings(kind: String) -> Result<(), String> {
         .map_err(|e| format!("open_permission_settings task failed to run: {e}"))?
 }
 
+/// Opens the bounded persistent-log directory in the platform file manager.
+#[tauri::command]
+pub async fn open_logs() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(crate::diagnostics::open_logs_directory)
+        .await
+        .map_err(|e| format!("open_logs task failed to run: {e}"))?
+}
+
+/// Returns an allowlisted, already-redacted report. Clipboard access stays
+/// in the webview so this command needs no additional native permission.
+#[tauri::command]
+pub async fn copy_diagnostics(app: AppHandle) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let settings = state
+            .settings
+            .read()
+            .map_err(|_| "settings lock poisoned".to_string())?
+            .clone();
+        crate::diagnostics::diagnostic_report(&settings)
+    })
+    .await
+    .map_err(|e| format!("copy_diagnostics task failed to run: {e}"))?
+}
+
 /// Returns compile-time platform support only; no I/O or OS prompt is involved.
 #[tauri::command]
 pub fn platform_capabilities() -> crate::platform::PlatformCapabilities {
