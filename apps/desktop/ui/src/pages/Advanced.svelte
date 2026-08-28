@@ -40,6 +40,13 @@
     label: v,
   }))
 
+  const MODEL_IDLE_OPTIONS = [
+    { value: '900', label: 'After 15 minutes' },
+    { value: '1800', label: 'After 30 minutes' },
+    { value: '3600', label: 'After 1 hour' },
+    { value: '0', label: 'Never' },
+  ]
+
   let devices = $state<string[]>([])
   let devicesError = $state('')
   let microphonePermission = $state<PermissionStatus | null>(null)
@@ -92,7 +99,7 @@
   ])
 </script>
 
-<Section title="Advanced" description="Text injection, audio input, and diagnostics.">
+<Section title="Advanced" description="Text injection, audio input, model memory, and diagnostics.">
   <Field label="Text injection" for="injection" hint="How refined text is delivered to the focused app.">
     <Select
       id="injection"
@@ -175,6 +182,24 @@
       bind:value={
         () => settings.advanced.vad_sensitivity,
         (v) => settingsStore.patch({ advanced: { vad_sensitivity: v } })
+      }
+    />
+  </Field>
+
+  <Field
+    label="Unload idle models"
+    for="model-idle-timeout"
+    hint="Releases memory after a language profile is unused. Its next hotkey press loads it again."
+  >
+    <Select
+      id="model-idle-timeout"
+      options={MODEL_IDLE_OPTIONS}
+      bind:value={
+        () => settings.advanced.model_idle_timeout_secs.toString(),
+        (v) =>
+          settingsStore.patch({
+            advanced: { model_idle_timeout_secs: Number(v) },
+          })
       }
     />
   </Field>

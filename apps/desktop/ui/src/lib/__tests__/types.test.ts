@@ -55,6 +55,7 @@ describe('Settings type/JSON round-trip', () => {
         injection: 'clipboard_only',
         audio_device: 'USB Microphone',
         vad_sensitivity: 0.75,
+        model_idle_timeout_secs: 0,
         log_level: 'debug',
       },
       // Two profiles (the normal bilingual case) with every field set to a
@@ -144,6 +145,7 @@ describe('defaultSettings', () => {
         injection: 'auto',
         audio_device: null,
         vad_sensitivity: 0.5,
+        model_idle_timeout_secs: 30 * 60,
         log_level: 'info',
       },
       profiles: [

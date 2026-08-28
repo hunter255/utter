@@ -116,7 +116,7 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::{select, unbounded, Receiver, Sender};
+use crossbeam_channel::{select, tick, unbounded, Receiver, Sender};
 
 use utter_audio::{rms_level, AudioError, AudioFrame, CaptureEvent, SilenceDetector};
 use utter_core::{
@@ -128,6 +128,11 @@ use utter_refine::{apply_rules, match_snippet, ReplaceRule, Snippet};
 use utter_store::{HistoryRepo, NewEntry};
 
 use crate::profiles::{ProfileDeps, ProfileRegistry};
+
+/// Idle expiry is intentionally checked much less often than audio/control
+/// channels are handled. A model staying resident for at most another 30
+/// seconds is harmless; waking the tray worker continuously is not.
+const MODEL_EVICTION_POLL_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Sink the runtime reports dictation phase changes and user-facing notices
 /// to. `state` matches the `DictationPhase` names in [`crate::events`]
@@ -463,6 +468,7 @@ fn phase_str(state: State) -> &'static str {
 
 fn worker_loop(deps: RuntimeDeps, sink: Arc<dyn EventSink>, control_rx: Receiver<ControlMsg>) {
     let (audio_tx, audio_rx) = unbounded::<CaptureEvent>();
+    let eviction_tick = tick(MODEL_EVICTION_POLL_INTERVAL);
     // Placeholder, replaced by `start_session_for` the moment the first press or `toggle()`
     // selects a profile (see `handle_hotkey_pressed`/`handle_toggle`) and reconstructs this with
     // that profile's own `refine_enabled`. The value here is never actually consulted:
@@ -516,6 +522,16 @@ fn worker_loop(deps: RuntimeDeps, sink: Arc<dyn EventSink>, control_rx: Receiver
                 Err(_) => {
                     cleanup_and_exit(&mut ctx);
                     return;
+                }
+            },
+            recv(eviction_tick) -> _ => {
+                // The registry also protects `active_binding` itself, but
+                // only running the pass at an idle boundary makes the
+                // lifetime rule explicit at the orchestrator level too.
+                if session.state() == State::Idle {
+                    let _ = ctx
+                        .profiles
+                        .evict_expired(Instant::now(), ctx.active_binding);
                 }
             },
         }
@@ -649,6 +665,11 @@ fn dispatch(session: &mut Session, ctx: &mut WorkerCtx, event: Event) {
         ctx.pending = None;
         ctx.session_started_at = None;
         ctx.silence_detector = None;
+        // Start the idle timeout after the complete pipeline (including
+        // refinement and injection), not after the last audio frame.
+        if let Some(binding) = ctx.active_binding {
+            ctx.profiles.mark_used(binding, Instant::now());
+        }
         // No session is in flight anymore; the next one may pick a different profile (see
         // `start_session_for`), so there is no binding to speak of until it does.
         ctx.active_binding = None;

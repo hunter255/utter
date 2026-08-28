@@ -221,7 +221,10 @@ fn build_deps(
         settings.refine.clone(),
         settings.dictionary.terms.clone(),
     ));
-    let (profiles, profile_notices) = ProfileRegistry::new(kept_profiles, loader);
+    let (mut profiles, profile_notices) = ProfileRegistry::new(kept_profiles, loader);
+    let idle_timeout_secs = settings.advanced.model_idle_timeout_secs;
+    profiles
+        .set_idle_timeout((idle_timeout_secs > 0).then(|| Duration::from_secs(idle_timeout_secs)));
     notices.extend(profile_notices);
 
     let injector = build_injector(settings.advanced.injection);

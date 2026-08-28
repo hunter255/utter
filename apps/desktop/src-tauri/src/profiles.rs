@@ -9,7 +9,9 @@
 //! setup cost more idle memory than a monolingual one, even for someone who
 //! never presses the second hotkey. [`ProfileRegistry`] instead builds a
 //! profile's [`ProfileDeps`] the first time [`ProfileRegistry::deps_for`] is
-//! asked for its binding, and keeps the result for every call after that.
+//! asked for its binding. An optional idle timeout lets the registry release
+//! the whole bundle again while no dictation is using it; the next press
+//! follows the exact same lazy-load path.
 //!
 //! ## Why failure isolation matters here
 //!
@@ -36,6 +38,7 @@
 //! one whose text gets injected.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use utter_core::{SttEngine, TextRefiner, Tone};
 use utter_inject::BindingId;
@@ -72,11 +75,11 @@ pub struct ProfileDeps {
     /// "show whatever partial the final engine itself produces", i.e.
     /// nothing at all for the offline engines in the catalog.
     pub draft_engine: Option<Box<dyn SttEngine>>,
-    /// `Arc` rather than `Box`: `ProfileRegistry` caches a profile's `ProfileDeps` forever once
-    /// loaded (see its own doc comment), so the worker needs to hand out a cheap clone of the
-    /// refiner on every press of the same binding — a `refine_with_timeout` call races it on a
-    /// detached thread (see `crate::runtime`) — rather than being able to move a `Box` out of a
-    /// value it doesn't own.
+    /// `Arc` rather than `Box`: the worker needs to hand out a cheap clone of
+    /// the refiner on every press — a `refine_with_timeout` call races it on
+    /// a detached thread (see `crate::runtime`) — rather than moving a `Box`
+    /// out of registry-owned profile dependencies. Idle eviction drops the
+    /// registry's `Arc`; any already-running refinement keeps its own clone.
     pub refiner: Option<Arc<dyn TextRefiner>>,
     pub refine_enabled: bool,
     pub tone: Tone,
@@ -211,6 +214,10 @@ impl ProfileLoader for RealProfileLoader {
 struct Entry {
     profile: LanguageProfile,
     deps: Option<ProfileDeps>,
+    /// Set whenever this entry is loaded or selected, and again when its
+    /// dictation session finishes. `None` means the dependencies are not in
+    /// memory, so there is nothing for the eviction pass to consider.
+    last_used: Option<Instant>,
 }
 
 /// Maps each configured [`LanguageProfile`]'s hotkey binding to its engines,
@@ -222,12 +229,12 @@ struct Entry {
 /// with the id `create_source` hands back for it.
 ///
 /// **Holds a settings snapshot, not a live view.** [`RealProfileLoader`]
-/// captures `global_refine` and `dictionary_terms` at construction, and
-/// every [`Entry`] caches its [`ProfileDeps`] forever once loaded — there is
-/// no `reload`/`invalidate` here. A settings change (the tray's refine
-/// checkbox, an edited dictionary term, ...) has no effect on an
-/// already-loaded profile until the whole registry is discarded and
-/// rebuilt, and rebuilding throws away *every* lazily-loaded engine —
+/// captures `global_refine` and `dictionary_terms` at construction. A
+/// loaded [`Entry`] may be evicted after its configured idle timeout, but a
+/// later lazy reload still uses that same snapshot. A settings change (the
+/// tray's refine checkbox, an edited dictionary term, ...) has no effect on an
+/// already-loaded or later reloaded profile until the whole registry is
+/// discarded and rebuilt, and rebuilding throws away *every* loaded engine —
 /// hundreds of MB, potentially — and re-pays the eager default-profile
 /// load. `runtime_boot::build_deps` is where that recreate happens and
 /// documents the decision to accept it: parity with the pre-profiles boot
@@ -235,6 +242,10 @@ struct Entry {
 pub struct ProfileRegistry {
     loader: Box<dyn ProfileLoader>,
     entries: Vec<Entry>,
+    /// `None` is the explicit "Never" setting. Kept in the registry because
+    /// it owns the resources and can therefore make eviction atomic: a
+    /// profile is either fully loaded or fully absent.
+    idle_timeout: Option<Duration>,
 }
 
 impl ProfileRegistry {
@@ -268,15 +279,30 @@ impl ProfileRegistry {
         profiles: Vec<LanguageProfile>,
         loader: Box<dyn ProfileLoader>,
     ) -> (Self, Vec<QueuedNotice>) {
+        Self::new_at(profiles, loader, Instant::now())
+    }
+
+    /// Timestamp-injected constructor used by the eviction tests. Production
+    /// calls [`Self::new`], so wall-clock concerns do not leak into callers.
+    fn new_at(
+        profiles: Vec<LanguageProfile>,
+        loader: Box<dyn ProfileLoader>,
+        now: Instant,
+    ) -> (Self, Vec<QueuedNotice>) {
         let entries: Vec<Entry> = profiles
             .into_iter()
             .map(|profile| Entry {
                 profile,
                 deps: None,
+                last_used: None,
             })
             .collect();
 
-        let mut registry = Self { loader, entries };
+        let mut registry = Self {
+            loader,
+            entries,
+            idle_timeout: None,
+        };
 
         let notices = if registry.entries.is_empty() {
             vec![(
@@ -286,7 +312,7 @@ impl ProfileRegistry {
                     .to_string(),
             )]
         } else {
-            registry.ensure_loaded(0)
+            registry.ensure_loaded(0, now)
         };
 
         (registry, notices)
@@ -305,10 +331,19 @@ impl ProfileRegistry {
         &mut self,
         id: BindingId,
     ) -> Option<(&mut ProfileDeps, Vec<QueuedNotice>)> {
+        self.deps_for_at(id, Instant::now())
+    }
+
+    fn deps_for_at(
+        &mut self,
+        id: BindingId,
+        now: Instant,
+    ) -> Option<(&mut ProfileDeps, Vec<QueuedNotice>)> {
         let index = id.index();
         self.entries.get(index)?;
 
-        let notices = self.ensure_loaded(index);
+        let notices = self.ensure_loaded(index, now);
+        self.entries[index].last_used = Some(now);
         let deps = self.entries[index]
             .deps
             .as_mut()
@@ -317,15 +352,61 @@ impl ProfileRegistry {
         Some((deps, notices))
     }
 
+    /// Applies the global idle policy. `None` deliberately means "Never";
+    /// changing the policy does not immediately drop anything; only the
+    /// worker's periodic idle pass performs eviction.
+    pub(crate) fn set_idle_timeout(&mut self, idle_timeout: Option<Duration>) {
+        self.idle_timeout = idle_timeout;
+    }
+
+    /// Records the end of a session so the timeout starts after the user is
+    /// actually finished, not after the last audio frame happened to touch
+    /// the profile.
+    pub(crate) fn mark_used(&mut self, id: BindingId, now: Instant) {
+        if let Some(entry) = self.entries.get_mut(id.index()) {
+            if entry.deps.is_some() {
+                entry.last_used = Some(now);
+            }
+        }
+    }
+
+    /// Drops every expired, inactive profile as one [`ProfileDeps`] value.
+    /// The caller also supplies the active binding as a second safety guard:
+    /// even if a future runtime invokes this while recording/transcribing,
+    /// those engines cannot disappear underneath the session.
+    pub(crate) fn evict_expired(&mut self, now: Instant, active: Option<BindingId>) -> usize {
+        let Some(idle_timeout) = self.idle_timeout else {
+            return 0;
+        };
+
+        let active_index = active.map(BindingId::index);
+        let mut evicted = 0;
+        for (index, entry) in self.entries.iter_mut().enumerate() {
+            if active_index == Some(index) || entry.deps.is_none() {
+                continue;
+            }
+            let expired = entry
+                .last_used
+                .is_some_and(|last_used| now.saturating_duration_since(last_used) >= idle_timeout);
+            if expired {
+                entry.deps = None;
+                entry.last_used = None;
+                evicted += 1;
+            }
+        }
+        evicted
+    }
+
     /// Loads `entries[index]`'s engines if it hasn't been loaded yet;
     /// returns the notices from that load, or an empty list if it was
     /// already loaded.
-    fn ensure_loaded(&mut self, index: usize) -> Vec<QueuedNotice> {
+    fn ensure_loaded(&mut self, index: usize, now: Instant) -> Vec<QueuedNotice> {
         if self.entries[index].deps.is_some() {
             return Vec::new();
         }
         let (deps, notices) = self.loader.load(&self.entries[index].profile);
         self.entries[index].deps = Some(deps);
+        self.entries[index].last_used = Some(now);
         notices
     }
 }
@@ -336,7 +417,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
-    use utter_core::{SttError, TranscribeOptions, Transcript};
+    use utter_core::{RefineError, SttError, TranscribeOptions, Transcript};
     use utter_store::profile::{DraftCfg, LanguageProfile};
 
     use super::*;
@@ -424,18 +505,30 @@ mod tests {
             self.registry.deps_for(id)
         }
 
+        fn deps_for_at(
+            &mut self,
+            id: BindingId,
+            now: Instant,
+        ) -> Option<(&mut ProfileDeps, Vec<QueuedNotice>)> {
+            self.registry.deps_for_at(id, now)
+        }
+
         fn load_count(&self) -> usize {
             self.count.load(Ordering::SeqCst)
         }
     }
 
     fn test_registry_with_counting_loader() -> CountingRegistry {
+        test_registry_with_counting_loader_at(Instant::now())
+    }
+
+    fn test_registry_with_counting_loader_at(now: Instant) -> CountingRegistry {
         let count = Arc::new(AtomicUsize::new(0));
         let loader = Box::new(CountingLoader {
             count: count.clone(),
         });
         let profiles = vec![profile("russian"), profile("english")];
-        let (registry, _notices) = ProfileRegistry::new(profiles, loader);
+        let (registry, _notices) = ProfileRegistry::new_at(profiles, loader, now);
         CountingRegistry { registry, count }
     }
 
@@ -484,6 +577,193 @@ mod tests {
 
         registry.deps_for(BindingId::from(1));
         assert_eq!(registry.load_count(), 2, "a loaded profile is not rebuilt");
+    }
+
+    #[test]
+    fn never_policy_keeps_loaded_profiles() {
+        let now = Instant::now();
+        let mut registry = test_registry_with_counting_loader_at(now);
+        registry.registry.set_idle_timeout(None);
+
+        assert_eq!(
+            registry
+                .registry
+                .evict_expired(now + Duration::from_secs(365 * 24 * 60 * 60), None),
+            0
+        );
+        registry
+            .deps_for_at(BindingId::from(0), now + Duration::from_secs(1))
+            .expect("default profile stays loaded");
+        assert_eq!(registry.load_count(), 1, "Never must not reload the model");
+    }
+
+    #[test]
+    fn expired_inactive_profile_reloads_once_on_the_next_press() {
+        let now = Instant::now();
+        let mut registry = test_registry_with_counting_loader_at(now);
+        registry
+            .registry
+            .set_idle_timeout(Some(Duration::from_secs(30)));
+        registry
+            .deps_for_at(BindingId::from(1), now + Duration::from_secs(1))
+            .expect("secondary profile loads");
+        assert_eq!(registry.load_count(), 2);
+
+        assert_eq!(
+            registry
+                .registry
+                .evict_expired(now + Duration::from_secs(31), Some(BindingId::from(0))),
+            1,
+            "only the expired, inactive secondary profile is evicted"
+        );
+
+        registry
+            .deps_for_at(BindingId::from(1), now + Duration::from_secs(32))
+            .expect("next press reloads the evicted profile");
+        assert_eq!(registry.load_count(), 3);
+        registry
+            .deps_for_at(BindingId::from(1), now + Duration::from_secs(33))
+            .expect("following press reuses that reload");
+        assert_eq!(registry.load_count(), 3, "reload happens exactly once");
+    }
+
+    #[test]
+    fn active_profile_is_never_evicted_even_after_timeout() {
+        let now = Instant::now();
+        let mut registry = test_registry_with_counting_loader_at(now);
+        registry
+            .registry
+            .set_idle_timeout(Some(Duration::from_secs(1)));
+
+        assert_eq!(
+            registry
+                .registry
+                .evict_expired(now + Duration::from_secs(60), Some(BindingId::from(0))),
+            0,
+            "the active binding is protected"
+        );
+        assert_eq!(registry.load_count(), 1);
+        assert_eq!(
+            registry
+                .registry
+                .evict_expired(now + Duration::from_secs(60), None),
+            1,
+            "the same profile becomes eligible once the session is no longer active"
+        );
+    }
+
+    #[test]
+    fn profiles_keep_independent_last_used_times() {
+        let now = Instant::now();
+        let mut registry = test_registry_with_counting_loader_at(now);
+        registry
+            .registry
+            .set_idle_timeout(Some(Duration::from_secs(15)));
+        registry
+            .deps_for_at(BindingId::from(1), now + Duration::from_secs(20))
+            .expect("secondary profile loads later");
+        registry
+            .registry
+            .mark_used(BindingId::from(0), now + Duration::from_secs(25));
+
+        assert_eq!(
+            registry
+                .registry
+                .evict_expired(now + Duration::from_secs(36), None),
+            1,
+            "the older secondary profile expires while the recently used default stays"
+        );
+        registry
+            .deps_for_at(BindingId::from(0), now + Duration::from_secs(37))
+            .expect("default profile stayed loaded");
+        assert_eq!(registry.load_count(), 2);
+        registry
+            .deps_for_at(BindingId::from(1), now + Duration::from_secs(37))
+            .expect("secondary profile reloads independently");
+        assert_eq!(registry.load_count(), 3);
+    }
+
+    struct DropCountingEngine(Arc<AtomicUsize>);
+
+    impl Drop for DropCountingEngine {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    impl SttEngine for DropCountingEngine {
+        fn begin(&mut self, _opts: &TranscribeOptions) -> Result<(), SttError> {
+            Ok(())
+        }
+
+        fn feed(&mut self, _samples: &[i16]) -> Result<Option<String>, SttError> {
+            Ok(None)
+        }
+
+        fn finish(&mut self) -> Result<Transcript, SttError> {
+            Ok(Transcript {
+                text: String::new(),
+                language: None,
+            })
+        }
+    }
+
+    struct DropCountingRefiner(Arc<AtomicUsize>);
+
+    impl Drop for DropCountingRefiner {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    impl TextRefiner for DropCountingRefiner {
+        fn refine(&self, text: &str, _tone: Tone) -> Result<String, RefineError> {
+            Ok(text.to_string())
+        }
+    }
+
+    struct ResourceLoader {
+        drops: Arc<AtomicUsize>,
+    }
+
+    impl ProfileLoader for ResourceLoader {
+        fn load(&self, profile: &LanguageProfile) -> (ProfileDeps, Vec<QueuedNotice>) {
+            (
+                ProfileDeps {
+                    engine: Box::new(DropCountingEngine(self.drops.clone())),
+                    draft_engine: Some(Box::new(DropCountingEngine(self.drops.clone()))),
+                    refiner: Some(Arc::new(DropCountingRefiner(self.drops.clone()))),
+                    refine_enabled: true,
+                    tone: Tone::Clean,
+                    language: None,
+                    engine_label: profile.id.clone(),
+                    profile_id: profile.id.clone(),
+                    initial_prompt: None,
+                },
+                Vec::new(),
+            )
+        }
+    }
+
+    #[test]
+    fn eviction_drops_final_preview_and_refiner_together() {
+        let now = Instant::now();
+        let drops = Arc::new(AtomicUsize::new(0));
+        let loader = Box::new(ResourceLoader {
+            drops: drops.clone(),
+        });
+        let (mut registry, _) = ProfileRegistry::new_at(vec![profile("default")], loader, now);
+        registry.set_idle_timeout(Some(Duration::from_secs(1)));
+
+        assert_eq!(
+            registry.evict_expired(now + Duration::from_secs(1), None),
+            1
+        );
+        assert_eq!(
+            drops.load(Ordering::SeqCst),
+            3,
+            "the final engine, preview engine and refiner leave memory as one bundle"
+        );
     }
 
     /// The profile at binding 0 (`"default"`) is the one `FailingLoader`
