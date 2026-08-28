@@ -53,6 +53,7 @@ default = []
 # Packaging builds that want the sherpa-onnx engine enable it explicitly
 # with `--features sherpa`.
 sherpa = ["utter-stt/sherpa"]
+whisper-metal = ["utter-stt/whisper-metal"]
 
 [dev-dependencies]
 serde_json = { workspace = true }

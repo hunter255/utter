@@ -105,4 +105,4 @@ jobs:
       - name: Build unsigned macOS app bundle
         if: matrix.os == 'macos-latest'
         working-directory: apps/desktop/src-tauri
-        run: ../ui/node_modules/.bin/tauri build --bundles app --no-sign --features sherpa
+        run: ../ui/node_modules/.bin/tauri build --bundles app --no-sign --features sherpa,whisper-metal

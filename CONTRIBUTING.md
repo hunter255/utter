@@ -37,18 +37,28 @@ brew install cmake
 ```
 
 Install the frontend dependencies once, then build an unsigned application
-bundle with the same Sherpa feature used by packaged builds:
+bundle with the same Sherpa and Whisper Metal features used by macOS packaged
+builds:
 
 ```sh
 npm ci --prefix apps/desktop/ui
 cd apps/desktop/src-tauri
-../ui/node_modules/.bin/tauri build --bundles app --no-sign --features sherpa
+../ui/node_modules/.bin/tauri build --bundles app --no-sign --features sherpa,whisper-metal
 ```
 
 The result is `target/release/bundle/macos/Utter.app`. The macOS platform
 configuration sets the deployment target and the bundle's `Info.plist`
 contains the microphone purpose string required before audio capture can be
 requested.
+
+`whisper-metal` is macOS-only and remains outside the default feature set, so
+Linux and ordinary workspace builds never link Metal. On a Mac mini M4, five
+reused-context transcriptions of whisper.cpp's JFK sample reduced median
+inference from 255 ms to 130 ms with `ggml-tiny`, and from 516 ms to 248 ms
+with `ggml-base`; transcripts matched in every run. Peak memory footprint for
+the base run changed from 320 MB to 328 MB. The first Metal use after its GPU
+cache is cold can take several seconds; subsequent model loads in the same
+environment were within roughly 50 ms of the CPU build.
 
 ## Workspace layout
 
