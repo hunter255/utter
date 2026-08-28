@@ -884,11 +884,9 @@ mod tests {
 
     #[test]
     fn streaming_loading_a_missing_model_directory_reports_model_not_found() {
-        let err = SherpaStreamingEngine::load(
-            Path::new("/nonexistent/model"),
-            SherpaConfig::default(),
-        )
-        .expect_err("the compatible transducer loader must remain usable");
+        let err =
+            SherpaStreamingEngine::load(Path::new("/nonexistent/model"), SherpaConfig::default())
+                .expect_err("the compatible transducer loader must remain usable");
         assert!(matches!(err, SttError::ModelNotFound(_)));
     }
 
