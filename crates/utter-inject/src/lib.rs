@@ -16,6 +16,7 @@ pub use inject::{ClipboardOnlyInjector, ClipboardPasteInjector, TypeInjector};
 
 mod clipboard;
 mod modifier_wait;
+mod paste_key;
 mod uinput_kbd;
 
 #[cfg(target_os = "linux")]

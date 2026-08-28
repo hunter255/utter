@@ -5571,6 +5571,7 @@ dependencies = [
  "crossbeam-channel",
  "evdev",
  "global-hotkey",
+ "objc2-core-graphics",
  "serde",
  "thiserror 2.0.19",
  "tracing",
