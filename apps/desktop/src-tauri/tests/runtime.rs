@@ -5,7 +5,7 @@
 //! injected/recorded text — never on internal implementation details.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -296,6 +296,23 @@ struct CountingCaptureBackend {
     tx_slot: Arc<Mutex<Option<Sender<CaptureEvent>>>>,
 }
 
+/// Marks the instant capture is opened, so a sink can prove the initial
+/// `recording` phase never runs platform UI work ahead of the microphone.
+struct CaptureOrderBackend {
+    started: Arc<AtomicBool>,
+}
+
+impl CaptureBackend for CaptureOrderBackend {
+    fn start(
+        &self,
+        _device: Option<&str>,
+        _tx: Sender<CaptureEvent>,
+    ) -> Result<Box<dyn ActiveCapture>, AudioError> {
+        self.started.store(true, Ordering::SeqCst);
+        Ok(Box::new(NoopActiveCapture))
+    }
+}
+
 impl CaptureBackend for CountingCaptureBackend {
     fn start(
         &self,
@@ -332,6 +349,23 @@ type Notice = (String, String);
 struct FakeSink {
     states_tx: Sender<Emission>,
     notices_tx: Sender<Notice>,
+}
+
+struct CaptureOrderSink {
+    capture_started: Arc<AtomicBool>,
+    recording_tx: Sender<bool>,
+}
+
+impl EventSink for CaptureOrderSink {
+    fn emit_state(&self, state: &str, _level: f32, _partial: Option<&str>) {
+        if state == "recording" {
+            let _ = self
+                .recording_tx
+                .send(self.capture_started.load(Ordering::SeqCst));
+        }
+    }
+
+    fn notify(&self, _kind: &str, _msg: &str) {}
 }
 
 impl EventSink for FakeSink {
@@ -627,15 +661,9 @@ fn fake_sink() -> (Arc<FakeSink>, Receiver<Emission>, Receiver<Notice>) {
 /// Retrieves the `Sender<CaptureEvent>` a `FakeCaptureBackend` stashed once
 /// capture started.
 ///
-/// Observing the `"recording"` state emission only proves `dispatch` has
-/// called `session.handle` and emitted the new phase — `emit_state` runs
-/// *before* the loop over effects that actually executes `Effect::StartCapture`
-/// (see `dispatch` in runtime.rs), and that execution happens on the worker
-/// thread while this call runs on the test thread. So there is no
-/// happens-before edge guaranteeing `ctx.capture.start()` (and therefore this
-/// stash) has completed by the time a test's `recv_state` call returns —
-/// only that it's *about to*. Poll with a bounded total wait instead of
-/// asserting immediately.
+/// The runtime now opens capture before emitting the initial `"recording"`
+/// state, but keep this bounded poll: callers also use the helper around
+/// reload/failure paths, and a timing assumption adds no value to those tests.
 fn capture_tx(slot: &Arc<Mutex<Option<Sender<CaptureEvent>>>>) -> Sender<CaptureEvent> {
     let deadline = Instant::now() + WAIT;
     loop {
@@ -719,6 +747,38 @@ fn press_and_release(
 }
 
 // ---- tests --------------------------------------------------------------
+
+#[test]
+fn capture_starts_before_the_recording_phase_reaches_the_hud() {
+    let capture_started = Arc::new(AtomicBool::new(false));
+    let (recording_tx, recording_rx) = unbounded();
+    let sink = Arc::new(CaptureOrderSink {
+        capture_started: capture_started.clone(),
+        recording_tx,
+    });
+
+    let (hotkey_tx, hotkey_rx) = unbounded();
+    let mut builder = DepsBuilder::new(Ok(transcript("unused")));
+    builder.capture = Some(Box::new(CaptureOrderBackend {
+        started: capture_started,
+    }));
+    let handle = Runtime::spawn(builder.build(hotkey_rx), sink);
+
+    hotkey_tx
+        .send(HotkeyEvent::Pressed {
+            binding: BindingId::from(0),
+        })
+        .expect("send pressed");
+
+    assert!(
+        recording_rx
+            .recv_timeout(WAIT)
+            .expect("expected recording phase"),
+        "capture must be open before HUD/state work runs"
+    );
+
+    handle.shutdown();
+}
 
 #[test]
 fn happy_path_emits_full_sequence_and_injects_refined_text() {
@@ -1560,8 +1620,12 @@ fn failed_default_fallback_ends_the_session_with_an_actionable_error() {
             binding: BindingId::from(0),
         })
         .expect("send pressed");
-    assert_eq!(recv_state(&states_rx), "recording");
-    recv_until(&states_rx, "idle");
+    assert_eq!(
+        recv_state(&states_rx),
+        "idle",
+        "a microphone that never opened must not be reported as recording"
+    );
+    assert_no_more_states(&states_rx);
 
     let (fallback_kind, fallback_message) = recv_notice(&notices_rx);
     assert_eq!(fallback_kind, "warning");

@@ -463,7 +463,7 @@
               <span class="perm-status" class:ok={permissions.text_injection === 'granted'}>
                 {permissionMark(permissions.text_injection)}
               </span>
-              Paste into other apps — {permissions.text_injection.replace('_', ' ')}
+              Paste and caret-relative HUD — {permissions.text_injection.replace('_', ' ')}
               {#if permissions.text_injection === 'not_determined'}
                 <button
                   type="button"
@@ -476,8 +476,8 @@
           {#if permissions.microphone === 'denied' || permissions.text_injection === 'denied'}
             <p class="warn">
               Enable the denied access in System Settings → Privacy & Security, then return to
-              Utter and check again. Dictation needs Microphone; automatic paste needs
-              Accessibility.
+              Utter and check again. Dictation needs Microphone; automatic paste and precise
+              HUD position need Accessibility.
             </p>
             {#if permissions.microphone === 'denied'}
               <strong class="recovery-label">Microphone recovery</strong>

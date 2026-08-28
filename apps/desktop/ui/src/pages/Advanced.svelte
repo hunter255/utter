@@ -222,8 +222,8 @@
 
   {#if capabilities.os === 'macos'}
     <Field
-      label="Automatic paste permission"
-      hint="macOS Accessibility lets Utter send Command-V to the field that was focused when dictation finished."
+      label="Accessibility permission"
+      hint="Lets Utter place the HUD near the caret and send Command-V to the focused field. Without it, the HUD follows the pointer and text stays on the clipboard."
     >
       {#if permissionError}
         <p class="error">{permissionError}</p>
@@ -239,7 +239,7 @@
             onclick={() => requestMacosPermission('text_injection')}
             disabled={permissionBusy !== null}
           >
-            {permissionBusy === 'text_injection' ? 'Requesting…' : 'Allow automatic paste'}
+            {permissionBusy === 'text_injection' ? 'Requesting…' : 'Allow Accessibility'}
           </button>
         {:else if textInjectionPermission === 'denied'}
           <p class="warning">

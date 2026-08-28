@@ -656,13 +656,31 @@ fn check_for_cancel(ctx: &mut WorkerCtx) -> bool {
     cancelled
 }
 
-/// Feeds `event` into the session, emits the resulting phase, then executes
-/// every effect the transition produced, in order. Effects that themselves
-/// complete synchronously and produce a further event (finishing
-/// transcription, refining, injecting) call back into `dispatch` directly,
-/// so a whole utterance unwinds as one straight-line call chain.
+/// Feeds `event` into the session and executes the resulting transition.
+/// `StartCapture` is the one effect run before the phase is emitted: showing
+/// the HUD can involve platform UI work, and none of it may delay opening the
+/// microphone or cost the first word. Every other effect still runs after
+/// the phase emission (in particular, `Inject` only runs after the HUD has
+/// been hidden). Effects that complete synchronously and produce a further
+/// event call back into `dispatch`, so a whole utterance unwinds as one
+/// straight-line call chain.
 fn dispatch(session: &mut Session, ctx: &mut WorkerCtx, event: Event) {
-    let effects = session.handle(event);
+    let mut effects = session.handle(event);
+    let state_after_transition = session.state();
+
+    if let Some(index) = effects
+        .iter()
+        .position(|effect| matches!(effect, Effect::StartCapture))
+    {
+        run_effect(session, ctx, effects.remove(index));
+        // A capture failure dispatches its own transition to Idle, including
+        // the matching state emission and cleanup. Do not emit that state or
+        // clean it up a second time from this superseded outer transition.
+        if session.state() != state_after_transition {
+            return;
+        }
+    }
+
     ctx.sink.emit_state(phase_str(session.state()), 0.0, None);
 
     for effect in effects {

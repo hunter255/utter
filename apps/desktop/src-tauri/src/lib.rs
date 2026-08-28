@@ -7,6 +7,8 @@ mod commands;
 mod diagnostics;
 /// Event payload shapes shared with the frontend.
 pub mod events;
+#[cfg(any(target_os = "macos", test))]
+mod hud_position;
 mod logging;
 #[cfg(target_os = "macos")]
 mod macos_hotkeys;
