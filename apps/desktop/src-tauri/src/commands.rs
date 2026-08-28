@@ -401,6 +401,14 @@ pub async fn request_permission(app: AppHandle, kind: String) -> Result<Permissi
     .map_err(|e| format!("request_permission task failed to run: {e}"))?
 }
 
+#[tauri::command]
+pub async fn open_permission_settings(kind: String) -> Result<(), String> {
+    let kind = crate::permissions::PermissionKind::parse(&kind)?;
+    tauri::async_runtime::spawn_blocking(move || crate::permissions::open_settings(kind))
+        .await
+        .map_err(|e| format!("open_permission_settings task failed to run: {e}"))?
+}
+
 /// Returns compile-time platform support only; no I/O or OS prompt is involved.
 #[tauri::command]
 pub fn platform_capabilities() -> crate::platform::PlatformCapabilities {

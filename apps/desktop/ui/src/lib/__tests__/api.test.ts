@@ -94,6 +94,13 @@ describe('api command wrappers', () => {
     expect(mockInvoke).toHaveBeenCalledWith('request_permission', { kind: 'microphone' })
   })
 
+  it('openPermissionSettings -> open_permission_settings with a closed permission kind', async () => {
+    await api.openPermissionSettings('text_injection')
+    expect(mockInvoke).toHaveBeenCalledWith('open_permission_settings', {
+      kind: 'text_injection',
+    })
+  })
+
   it('platformCapabilities -> platform_capabilities', async () => {
     await api.platformCapabilities()
     expect(mockInvoke).toHaveBeenCalledWith('platform_capabilities')
