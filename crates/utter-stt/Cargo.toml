@@ -27,6 +27,7 @@ required-features = ["sherpa"]
 [features]
 default = ["whisper", "cloud"]
 whisper = ["dep:whisper-rs"]
+whisper-metal = ["whisper", "whisper-rs/metal"]
 cloud = ["dep:reqwest", "dep:serde", "dep:serde_json", "dep:hound"]
 # Not in `default`: the build script downloads a prebuilt native archive on
 # first build, which CI and offline builds must opt into deliberately.
