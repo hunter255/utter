@@ -5,6 +5,7 @@ import {
   formatCombo,
   hasBaseKey,
   isModifierToken,
+  modifierTokensFor,
   parseChordTokens,
   tokenFor,
 } from '../hotkey'
@@ -66,6 +67,26 @@ describe('tokenFor', () => {
     expect(tokenFor('Escape', 'Escape')).toBeNull()
     expect(tokenFor('Tab', 'Tab')).toBeNull()
     expect(tokenFor('', '!')).toBeNull()
+  })
+})
+
+describe('modifierTokensFor', () => {
+  it('recovers a complete macOS modifier chord from base-key event flags', () => {
+    expect(
+      modifierTokensFor({ ctrlKey: true, altKey: true, shiftKey: false, metaKey: true }),
+    ).toEqual(['ctrl', 'alt', 'super'])
+  })
+
+  it('returns modifiers in canonical chord order', () => {
+    expect(
+      modifierTokensFor({ ctrlKey: true, altKey: true, shiftKey: true, metaKey: true }),
+    ).toEqual(['ctrl', 'alt', 'shift', 'super'])
+  })
+
+  it('returns no tokens when the event carries no modifiers', () => {
+    expect(
+      modifierTokensFor({ ctrlKey: false, altKey: false, shiftKey: false, metaKey: false }),
+    ).toEqual([])
   })
 })
 

@@ -13,6 +13,28 @@
 export const MODIFIER_ORDER = ['ctrl', 'alt', 'shift', 'super'] as const
 export type ModifierToken = (typeof MODIFIER_ORDER)[number]
 
+export interface ModifierFlags {
+  ctrlKey: boolean
+  altKey: boolean
+  shiftKey: boolean
+  metaKey: boolean
+}
+
+/** Reads modifier state from the flags carried by every keyboard event.
+ *
+ * This is deliberately used in addition to the modifier keys' own keydown
+ * events. WKWebView may omit an individual modifier keydown while still
+ * setting the corresponding flag on the base-key event, especially for
+ * Command-based shortcuts. */
+export function modifierTokensFor(flags: ModifierFlags): ModifierToken[] {
+  const tokens: ModifierToken[] = []
+  if (flags.ctrlKey) tokens.push('ctrl')
+  if (flags.altKey) tokens.push('alt')
+  if (flags.shiftKey) tokens.push('shift')
+  if (flags.metaKey) tokens.push('super')
+  return tokens
+}
+
 const MODIFIER_KEY_NAMES: Record<string, ModifierToken> = {
   Control: 'ctrl',
   Alt: 'alt',
