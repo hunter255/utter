@@ -295,6 +295,11 @@ pub struct Advanced {
     pub injection: InjectionPreference,
     pub audio_device: Option<String>,
     pub vad_sensitivity: f32,
+    /// How long a loaded language profile may sit unused before its speech
+    /// engines and refiner are released. Zero is the explicit "Never"
+    /// choice (TOML has no persistent `null` value); the next hotkey press
+    /// always loads an evicted profile again.
+    pub model_idle_timeout_secs: u64,
     pub log_level: String,
 }
 
@@ -304,6 +309,7 @@ impl Default for Advanced {
             injection: InjectionPreference::Auto,
             audio_device: None,
             vad_sensitivity: 0.5,
+            model_idle_timeout_secs: 30 * 60,
             log_level: "info".to_string(),
         }
     }
@@ -520,6 +526,19 @@ mod tests {
     }
 
     #[test]
+    fn never_unload_models_survives_save_and_load() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = config_path(dir.path());
+        let mut settings = Settings::default();
+        settings.advanced.model_idle_timeout_secs = 0;
+
+        save(&path, &settings).expect("save should succeed");
+        let loaded = load(&path).expect("load should succeed");
+
+        assert_eq!(loaded.advanced.model_idle_timeout_secs, 0);
+    }
+
+    #[test]
     fn loading_file_with_unknown_key_succeeds() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = config_path(dir.path());
@@ -586,6 +605,11 @@ mod tests {
         assert_eq!(loaded.dictation.mode, DictationMode::Toggle);
         assert_eq!(loaded.dictation.silence_timeout_secs, None);
         assert_eq!(loaded.general, General::default());
+        assert_eq!(
+            loaded.advanced.model_idle_timeout_secs,
+            30 * 60,
+            "an older partial config gets the conservative memory default"
+        );
         assert_eq!(loaded.profiles, Settings::default().profiles);
     }
 
@@ -758,6 +782,7 @@ terms = ["PostgreSQL"]
 
         assert_eq!(settings.advanced.injection, InjectionPreference::Auto);
         assert_eq!(settings.advanced.audio_device, None);
+        assert_eq!(settings.advanced.model_idle_timeout_secs, 30 * 60);
         assert_eq!(settings.advanced.vad_sensitivity, 0.5);
         assert_eq!(settings.advanced.log_level, "info");
     }

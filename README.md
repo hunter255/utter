@@ -284,6 +284,11 @@ rejected, so the format tolerates being hand-edited or partially upgraded.
   than Ctrl+V, and publishes the text to both the CLIPBOARD and PRIMARY
   selections, so it works with a non-Latin keyboard layout active and in
   terminals alike.
+- **Model memory** — `advanced.model_idle_timeout_secs` controls how long a
+  loaded language profile stays in memory after its last completed session.
+  The default is 1800 seconds (30 minutes); `0` is the persistent Never
+  choice when models should remain resident until settings reload or app
+  exit.
 - **Dictionary and snippets** — custom terms and replacement rules live
   under `[dictionary]`; snippets are a list of trigger/body pairs under
   `[[snippets]]`. Both are editable from the settings UI.

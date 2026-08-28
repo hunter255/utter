@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   endpoint after the primary source fails. The app names the fallback before
   using it, carries compatible partial bytes across sources, and still
   requires the original catalog size and SHA-256 before installation.
+- Loaded language-profile models are released after 30 minutes of inactivity
+  by default, with 15/30/60-minute and Never choices in Advanced settings.
+  Active dictation is protected, and the next press lazily reloads the whole
+  profile bundle when needed.
 
 ### Changed
 

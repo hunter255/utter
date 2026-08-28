@@ -152,9 +152,11 @@ partial and has no state for one.
   model and refinement policy as one unit, so pressing the chord for Russian
   or English selects everything that follows from that language with no
   separate engine choice. `ProfileRegistry` (`apps/desktop/src-tauri/src/profiles.rs`)
-  builds a profile's engine and refiner the first time its hotkey is
-  actually pressed, not at app boot, and keeps the result for every press
-  after that. Lazy loading matters because the models a profile can select
+  warms the primary profile at app boot and builds every additional profile's
+  engine and refiner only when its hotkey is first pressed. A global idle timeout can later drop the
+  profile's final engine, preview engine and refiner as one unit; active
+  dictation is excluded, and the next press follows the same lazy-load path.
+  Lazy loading matters because the models a profile can select
   together weigh about a gigabyte, the app sits in the tray all day, and most
   sessions only ever speak one language — loading every configured profile's
   engine at boot would make a bilingual setup cost more idle memory than a

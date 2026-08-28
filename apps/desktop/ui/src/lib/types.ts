@@ -121,6 +121,8 @@ export interface Advanced {
   injection: InjectionPreference
   audio_device: string | null
   vad_sensitivity: number
+  /** Zero means loaded profile models stay resident until reload/quit. */
+  model_idle_timeout_secs: number
   log_level: string
 }
 
@@ -174,6 +176,7 @@ export function defaultSettings(): Settings {
       injection: 'auto',
       audio_device: null,
       vad_sensitivity: 0.5,
+      model_idle_timeout_secs: 30 * 60,
       log_level: 'info',
     },
     // Mirrors `Settings::default()`'s single seeded profile exactly: a
