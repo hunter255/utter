@@ -2,8 +2,10 @@
 //! clipboard-only as the universal last resort.
 //!
 //! Each backend implements [`utter_core::TextInjector`]. Constructing
-//! [`ClipboardPasteInjector`] can fail where no paste-key backend or required
-//! OS permission is available; [`TypeInjector`] still requires Linux uinput.
+//! [`ClipboardPasteInjector`] can fail where no paste-key backend is
+//! available; [`TypeInjector`] still requires Linux uinput. On macOS the
+//! Accessibility permission is checked at injection time because it can
+//! change while the process remains open.
 //! Callers should compose only the backends that constructed successfully,
 //! typically via [`crate::chain::ChainInjector`].
 
@@ -46,7 +48,7 @@ pub struct ClipboardPasteInjector {
 
 impl ClipboardPasteInjector {
     /// Creates a new injector, failing if the platform has no paste-key
-    /// backend or macOS event-posting permission has not been granted.
+    /// backend. macOS event-posting permission is checked for every paste.
     pub fn new() -> Result<Self, InjectError> {
         Ok(Self {
             paste_key: PasteKey::new()?,
