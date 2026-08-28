@@ -24,6 +24,15 @@ pub struct AudioFrame {
     pub samples: Vec<i16>,
 }
 
+/// Messages produced by a live capture stream. Keeping stream failure on the
+/// same channel as frames gives the owner a deterministic end to a recording
+/// whose device disappeared instead of leaving it silently stuck.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CaptureEvent {
+    Frame(AudioFrame),
+    StreamFailed(String),
+}
+
 /// Lists the names of available audio input devices.
 ///
 /// Best-effort: returns an empty vector if the audio host cannot be queried

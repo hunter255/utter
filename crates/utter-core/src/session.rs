@@ -34,6 +34,7 @@ pub enum Event {
     HotkeyPressed,
     HotkeyReleased,
     CancelRequested,
+    CaptureFailed(String),
     SilenceTimeout,
     TranscriptReady(Transcript),
     TranscriptFailed(String),
@@ -119,6 +120,10 @@ impl Session {
             Event::CancelRequested => {
                 self.state = State::Idle;
                 vec![Effect::StopCapture]
+            }
+            Event::CaptureFailed(reason) => {
+                self.state = State::Idle;
+                vec![Effect::StopCapture, Effect::NotifyError(reason)]
             }
             _ => vec![],
         }
@@ -260,6 +265,35 @@ mod tests {
         let fx = s.handle(Event::CancelRequested);
         assert_eq!(s.state(), State::Idle);
         assert_eq!(fx, vec![Effect::StopCapture]);
+    }
+
+    #[test]
+    fn recording_capture_failure_stops_and_returns_idle_without_transcribing() {
+        let mut s = Session::new(DictationMode::PushToTalk, true);
+        s.handle(Event::HotkeyPressed);
+
+        let fx = s.handle(Event::CaptureFailed("microphone disconnected".to_string()));
+
+        assert_eq!(s.state(), State::Idle);
+        assert_eq!(
+            fx,
+            vec![
+                Effect::StopCapture,
+                Effect::NotifyError("microphone disconnected".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn late_capture_failure_after_recording_stopped_is_ignored() {
+        let mut s = Session::new(DictationMode::PushToTalk, false);
+        s.handle(Event::HotkeyPressed);
+        s.handle(Event::HotkeyReleased);
+
+        let fx = s.handle(Event::CaptureFailed("late callback".to_string()));
+
+        assert_eq!(s.state(), State::Transcribing);
+        assert!(fx.is_empty());
     }
 
     // Transcribing | TranscriptReady(t), refine on, t nonempty -> Refining, Refine(t)

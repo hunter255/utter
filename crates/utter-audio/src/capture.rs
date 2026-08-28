@@ -11,7 +11,7 @@ use utter_core::SAMPLE_RATE;
 
 use crate::error::AudioError;
 use crate::resample::Resampler;
-use crate::AudioFrame;
+use crate::{AudioFrame, CaptureEvent};
 
 #[cfg(target_os = "macos")]
 fn ensure_microphone_permission(status: crate::MicrophonePermission) -> Result<(), AudioError> {
@@ -86,6 +86,13 @@ fn lock_assembler(assembler: &Mutex<FrameAssembler>) -> std::sync::MutexGuard<'_
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// Posts a terminal stream error without ever waiting for the runtime worker.
+/// Split from CPAL's callback so the callback's disconnect behaviour is
+/// covered without needing real audio hardware to fail in a test.
+fn report_stream_failure(tx: &Sender<CaptureEvent>, reason: String) {
+    let _ = tx.try_send(CaptureEvent::StreamFailed(reason));
+}
+
 /// An active microphone capture stream.
 ///
 /// Wraps a [`cpal::Stream`]. cpal stream handles are not `Send` on every
@@ -96,17 +103,17 @@ fn lock_assembler(assembler: &Mutex<FrameAssembler>) -> std::sync::MutexGuard<'_
 pub struct Capture {
     stream: Stream,
     assembler: Arc<Mutex<FrameAssembler>>,
-    tx: Sender<AudioFrame>,
+    tx: Sender<CaptureEvent>,
 }
 
 impl Capture {
     /// Starts capturing from `device` (by name; `None` selects the host's
     /// default input device), using that device's default input
     /// configuration. Captured audio is downmixed and resampled to 16 kHz
-    /// mono and delivered as ~100 ms [`AudioFrame`]s via `tx` until
+    /// mono and delivered as [`CaptureEvent::Frame`] messages via `tx` until
     /// [`stop`](Capture::stop) is called or `tx`'s receiver is dropped (in
-    /// which case frames are silently discarded rather than panicking).
-    pub fn start(device: Option<&str>, tx: Sender<AudioFrame>) -> Result<Capture, AudioError> {
+    /// which case events are silently discarded rather than panicking).
+    pub fn start(device: Option<&str>, tx: Sender<CaptureEvent>) -> Result<Capture, AudioError> {
         #[cfg(target_os = "macos")]
         ensure_microphone_permission(crate::microphone_permission())?;
 
@@ -174,7 +181,7 @@ impl Capture {
             // The receiver may already be gone (e.g. the app is shutting
             // down); the flushed audio is then discarded rather than
             // panicking.
-            let _ = self.tx.send(frame);
+            let _ = self.tx.send(CaptureEvent::Frame(frame));
         }
     }
 }
@@ -186,12 +193,13 @@ fn build_stream<T>(
     device: &cpal::Device,
     config: &StreamConfig,
     assembler: Arc<Mutex<FrameAssembler>>,
-    tx: Sender<AudioFrame>,
+    tx: Sender<CaptureEvent>,
 ) -> Result<Stream, AudioError>
 where
     T: SizedSample,
     f32: FromSample<T>,
 {
+    let error_tx = tx.clone();
     let data_callback = move |data: &[T], _info: &InputCallbackInfo| {
         let floats: Vec<f32> = data.iter().map(|&s| f32::from_sample(s)).collect();
 
@@ -200,12 +208,16 @@ where
             // The receiver may have been dropped (e.g. the app is shutting
             // down); that just means this and future frames are discarded.
             // The audio callback must never panic, so the error is ignored.
-            let _ = tx.send(frame);
+            let _ = tx.send(CaptureEvent::Frame(frame));
         }
     };
 
-    let error_callback = |err: cpal::Error| {
+    let error_callback = move |err: cpal::Error| {
         tracing::error!("audio input stream error: {err}");
+        // CPAL invokes this from its audio/backend thread. An unbounded
+        // channel's `try_send` never waits for the runtime worker; if that
+        // worker is already gone, the event is simply discarded.
+        report_stream_failure(&error_tx, err.to_string());
     };
 
     device
@@ -251,8 +263,10 @@ mod tests {
         capture.stop();
 
         let mut total_samples = 0;
-        while let Ok(frame) = rx.try_recv() {
-            total_samples += frame.samples.len();
+        while let Ok(event) = rx.try_recv() {
+            if let CaptureEvent::Frame(frame) = event {
+                total_samples += frame.samples.len();
+            }
         }
 
         println!("captured {total_samples} samples in ~1s");
@@ -293,6 +307,21 @@ mod tests {
         // The final frame should be the short trailing one, not a full 1600.
         let last = collected.last().expect("at least one frame emitted");
         assert_eq!(last.samples.len(), 400);
+    }
+
+    #[test]
+    fn stream_failure_is_typed_and_a_disconnected_owner_never_panics() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        report_stream_failure(&tx, "device disconnected".to_string());
+        assert_eq!(
+            rx.try_recv(),
+            Ok(CaptureEvent::StreamFailed(
+                "device disconnected".to_string()
+            ))
+        );
+
+        drop(rx);
+        report_stream_failure(&tx, "late backend error".to_string());
     }
 
     /// Same guarantee, but with actual resampling (48kHz -> 16kHz) in play,

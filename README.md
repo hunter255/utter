@@ -31,7 +31,10 @@ endpoint, a model download).
   profile's hotkey.
 - **Dictation session** — push-to-talk or toggle mode, a small always-on-top
   HUD showing recording/transcribing/refining state and a live input level
-  meter, cancel with Escape or a hotkey tap.
+  meter, cancel with Escape or a hotkey tap. If a Bluetooth/USB microphone
+  disappears, the partial utterance is discarded with an actionable notice;
+  a missing explicitly selected input can use the system default for that run
+  without silently changing the saved preference.
 - **Speech-to-text engines** — `whisper.cpp` for accurate batch transcription
   (tiny through large-v3-turbo, quantized variants included); `sherpa-onnx`
   for fast offline transcription, one transducer model per language
