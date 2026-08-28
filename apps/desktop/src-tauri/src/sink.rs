@@ -79,6 +79,13 @@ pub(crate) fn notify_no_session(app: &AppHandle) {
     TauriEventSink::new(app.clone()).notify("warning", "dictation engine is not running");
 }
 
+/// Reports a recoverable settings/platform integration failure while the
+/// settings window is live. Kept here so callers do not need to know how the
+/// event bus and desktop-notification channels are paired.
+pub(crate) fn notify_warning(app: &AppHandle, message: &str) {
+    TauriEventSink::new(app.clone()).notify("warning", message);
+}
+
 /// Marks the HUD as a `Notification`-type window at the GTK level (see
 /// module docs for why `tauri.conf.json`'s `focusable: false` alone is not
 /// enough on GNOME/Wayland/Mutter). Called once from `setup`; logs and

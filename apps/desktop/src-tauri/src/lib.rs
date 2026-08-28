@@ -2,6 +2,7 @@
 //! command handlers, the system tray, and the live dictation runtime, then
 //! runs the event loop.
 
+mod autostart;
 mod commands;
 /// Event payload shapes shared with the frontend.
 pub mod events;
@@ -96,18 +97,42 @@ fn init_tracing(setting: &str) {
 /// panic.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() -> Result<(), String> {
-    let builder = tauri::Builder::default().plugin(tauri_plugin_notification::init());
+    let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
+        // A stable name keeps the OS registration singular even if the
+        // human-facing package name changes. The plugin's default macOS
+        // backend is its LaunchAgent implementation; no frontend API or
+        // handwritten plist is involved.
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .app_name(utter_store::APP_IDENTIFIER)
+                .build(),
+        );
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(macos_hotkeys::plugin());
 
     let app = builder
         .setup(|app| {
-            let state = AppState::new().map_err(|e| e.to_string())?;
+            let mut state = AppState::new().map_err(|e| e.to_string())?;
             // As early as settings are available, and before `boot` — every
             // degradation it reports is logged on the way past.
             match state.settings.read() {
                 Ok(settings) => init_tracing(&settings.advanced.log_level),
                 Err(_) => init_tracing("info"),
+            }
+
+            // Settings are the source of truth across reinstalls and OS
+            // cleanup. Reconcile once at startup so a missing/stale Login
+            // Item heals without requiring the user to toggle the setting.
+            let wants_autostart = state
+                .settings
+                .read()
+                .map(|settings| settings.general.autostart)
+                .unwrap_or(false);
+            if let Err(error) = autostart::reconcile(app.handle(), wants_autostart) {
+                state
+                    .startup_notices
+                    .push(autostart::failure_notice(&error));
             }
             app.manage(state);
 
