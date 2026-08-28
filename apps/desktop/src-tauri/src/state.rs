@@ -2,12 +2,12 @@
 //! command through `tauri::State<AppState>`.
 
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::{Context, Result};
 
-use utter_store::{HistoryRepo, ModelManager, Settings};
+use utter_store::{DownloadCancellation, HistoryRepo, ModelManager, Settings};
 
 use crate::events::Notice;
 use crate::runtime::RuntimeHandle;
@@ -70,6 +70,135 @@ impl PendingNotices {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ModelOperationKind {
+    Download,
+    Remove,
+}
+
+impl ModelOperationKind {
+    fn present_participle(self) -> &'static str {
+        match self {
+            Self::Download => "downloading",
+            Self::Remove => "removing",
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ActiveModelOperation {
+    generation: u64,
+    id: String,
+    kind: ModelOperationKind,
+    cancellation: Option<DownloadCancellation>,
+}
+
+/// Serializes model-file mutations and owns the cancellation handle for the
+/// one active download. A lease lives on the blocking worker and clears the
+/// slot on every return path, including a panic unwind or a dropped command
+/// future.
+#[derive(Debug, Default)]
+pub(crate) struct ModelOperations {
+    active: Mutex<Option<ActiveModelOperation>>,
+    next_generation: AtomicU64,
+}
+
+impl ModelOperations {
+    pub(crate) fn begin_download(
+        self: &Arc<Self>,
+        id: &str,
+    ) -> Result<(ModelOperationLease, DownloadCancellation), String> {
+        let cancellation = DownloadCancellation::default();
+        let lease = self.begin(id, ModelOperationKind::Download, Some(cancellation.clone()))?;
+        Ok((lease, cancellation))
+    }
+
+    pub(crate) fn begin_remove(self: &Arc<Self>, id: &str) -> Result<ModelOperationLease, String> {
+        self.begin(id, ModelOperationKind::Remove, None)
+    }
+
+    fn begin(
+        self: &Arc<Self>,
+        id: &str,
+        kind: ModelOperationKind,
+        cancellation: Option<DownloadCancellation>,
+    ) -> Result<ModelOperationLease, String> {
+        let mut active = self
+            .active
+            .lock()
+            .map_err(|_| "model operation lock poisoned".to_string())?;
+        if let Some(existing) = active.as_ref() {
+            return Err(format!(
+                "model '{}' is already {}; wait for it to finish or cancel its download first",
+                existing.id,
+                existing.kind.present_participle()
+            ));
+        }
+
+        let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
+        *active = Some(ActiveModelOperation {
+            generation,
+            id: id.to_string(),
+            kind,
+            cancellation,
+        });
+        Ok(ModelOperationLease {
+            owner: Arc::clone(self),
+            generation,
+        })
+    }
+
+    /// Requests cancellation of `id`. A download that completed between the
+    /// UI click and this command is a successful no-op; a different active
+    /// operation remains an explicit conflict.
+    pub(crate) fn cancel_download(&self, id: &str) -> Result<bool, String> {
+        let active = self
+            .active
+            .lock()
+            .map_err(|_| "model operation lock poisoned".to_string())?;
+        let Some(operation) = active.as_ref() else {
+            return Ok(false);
+        };
+        if operation.id != id {
+            return Err(format!(
+                "model '{}' is currently {}; cannot cancel download of '{}'",
+                operation.id,
+                operation.kind.present_participle(),
+                id
+            ));
+        }
+        let Some(cancellation) = operation.cancellation.as_ref() else {
+            return Err(format!("model '{}' is being removed, not downloaded", id));
+        };
+        cancellation.cancel();
+        Ok(true)
+    }
+}
+
+/// Keeps a model operation registered for exactly as long as its blocking
+/// task exists.
+#[derive(Debug)]
+pub(crate) struct ModelOperationLease {
+    owner: Arc<ModelOperations>,
+    generation: u64,
+}
+
+impl Drop for ModelOperationLease {
+    fn drop(&mut self) {
+        let mut active = self
+            .owner
+            .active
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if active
+            .as_ref()
+            .is_some_and(|operation| operation.generation == self.generation)
+        {
+            *active = None;
+        }
+    }
+}
+
 /// Application state shared across all Tauri commands.
 ///
 /// `models` is wrapped in an `Arc` (rather than owned directly) so the async
@@ -78,6 +207,9 @@ impl PendingNotices {
 pub struct AppState {
     pub settings: RwLock<Settings>,
     pub models: Arc<ModelManager>,
+    /// At most one download/remove mutates model files at a time; downloads
+    /// expose their cancellation flag through this registry.
+    pub(crate) model_operations: Arc<ModelOperations>,
     pub history: Mutex<HistoryRepo>,
     /// The running dictation runtime's control handle. `None` only if boot
     /// (`runtime_boot::boot`) itself failed outright (an unexpected I/O
@@ -159,6 +291,7 @@ impl AppState {
         Ok(Self {
             settings: RwLock::new(settings),
             models,
+            model_operations: Arc::new(ModelOperations::default()),
             history: Mutex::new(history),
             session_ctl: Mutex::new(None),
             startup_notices,
@@ -212,6 +345,50 @@ mod tests {
     use super::*;
 
     use crate::events::NoticeKind;
+
+    #[test]
+    fn model_operation_lease_serializes_downloads_and_removes_then_releases() {
+        let operations = Arc::new(ModelOperations::default());
+        let (download, _) = operations.begin_download("large").expect("first download");
+
+        let conflict = operations
+            .begin_remove("small")
+            .expect_err("remove must not race a download");
+        assert!(conflict.contains("large"));
+        assert!(conflict.contains("downloading"));
+
+        drop(download);
+        let remove = operations.begin_remove("small").expect("slot released");
+        drop(remove);
+        operations
+            .begin_download("small")
+            .expect("remove lease released");
+    }
+
+    #[test]
+    fn cancellation_targets_only_the_matching_active_download() {
+        let operations = Arc::new(ModelOperations::default());
+        let (_lease, cancellation) = operations.begin_download("giga").expect("download");
+
+        let mismatch = operations
+            .cancel_download("parakeet")
+            .expect_err("another model must not be cancelled");
+        assert!(mismatch.contains("giga"));
+        assert!(!cancellation.is_cancelled());
+
+        assert!(operations.cancel_download("giga").expect("cancel"));
+        assert!(cancellation.is_cancelled());
+        assert!(operations.cancel_download("giga").expect("idempotent"));
+    }
+
+    #[test]
+    fn cancellation_after_completion_is_a_successful_no_op() {
+        let operations = Arc::new(ModelOperations::default());
+        let (lease, _) = operations.begin_download("small").expect("download");
+        drop(lease);
+
+        assert!(!operations.cancel_download("small").expect("late cancel"));
+    }
 
     #[test]
     fn a_notice_without_a_backup_does_not_claim_one_was_saved() {

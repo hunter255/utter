@@ -180,6 +180,7 @@ pub fn run() -> Result<(), String> {
             commands::list_devices,
             commands::list_models,
             commands::download_model,
+            commands::cancel_model_download,
             commands::remove_model,
             commands::history_list,
             commands::history_delete,

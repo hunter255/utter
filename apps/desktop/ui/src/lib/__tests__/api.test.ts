@@ -51,6 +51,11 @@ describe('api command wrappers', () => {
     expect(mockInvoke).toHaveBeenCalledWith('download_model', { id: 'small' })
   })
 
+  it('cancelModelDownload -> cancel_model_download with an `id` key', async () => {
+    await api.cancelModelDownload('small')
+    expect(mockInvoke).toHaveBeenCalledWith('cancel_model_download', { id: 'small' })
+  })
+
   it('removeModel -> remove_model with an `id` key', async () => {
     await api.removeModel('small')
     expect(mockInvoke).toHaveBeenCalledWith('remove_model', { id: 'small' })

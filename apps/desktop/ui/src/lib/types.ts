@@ -244,6 +244,7 @@ export function deepEqual(a: unknown, b: unknown): boolean {
 /** `crates/utter-store/src/models.rs::ModelInfo` */
 export type ModelRole = 'final' | 'preview'
 export type PerformanceClass = 'fast' | 'balanced' | 'heavy'
+export type ModelDownloadOutcome = 'installed' | 'cancelled'
 
 export interface ModelInfo {
   id: string

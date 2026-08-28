@@ -15,6 +15,8 @@ pub use identity::{
     LEGACY_STORAGE_IDENTIFIER,
 };
 pub use migrate::migrate_v1;
-pub use models::{ModelInfo, ModelManager, ModelRole, PerformanceClass};
+pub use models::{
+    DownloadCancellation, DownloadCancelled, ModelInfo, ModelManager, ModelRole, PerformanceClass,
+};
 pub use profile::{DraftCfg, LanguageProfile, RecognitionCfg, RecognitionPromptMode, RefinePolicy};
 pub use settings::{load, save, Settings};

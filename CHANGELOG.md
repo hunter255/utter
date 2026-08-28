@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   selection alongside every final local model, while onboarding and profile
   settings warn about incompatible model/language pairs without silently
   changing either choice.
+- In-progress model downloads can be cancelled from onboarding or Engines.
+  Cancellation cleans the staging area, never publishes a partial install,
+  and leaves the model ready for a fresh retry.
 
 ### Changed
 

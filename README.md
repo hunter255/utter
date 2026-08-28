@@ -43,7 +43,8 @@ endpoint, a model download).
   dictionary terms as hotwords; or any OpenAI-compatible cloud
   `/audio/transcriptions` endpoint (BYOK). Every model selector is populated
   from the catalog and shows language fit, relative runtime cost, download
-  size, and a warning when a profile language does not match the model.
+  size, and a warning when a profile language does not match the model. Large
+  downloads can be cancelled without leaving a partial model installed.
 - **Live preview** — optionally, a second streaming sherpa-onnx model runs
   alongside the engine above and shows words in the HUD while you are still
   speaking. It is a draft only: the text that actually gets inserted always
