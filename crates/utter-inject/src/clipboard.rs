@@ -144,12 +144,53 @@ mod platform {
 
 #[cfg(not(target_os = "linux"))]
 mod platform {
+    use std::borrow::Cow;
+    use std::path::PathBuf;
+
     use utter_core::InjectError;
+
+    /// One supported payload that occupied the clipboard before Utter
+    /// temporarily replaced it with a transcript.
+    ///
+    /// A clipboard can advertise several representations of the same value.
+    /// Preserve the richest useful one in a deterministic order: file lists
+    /// and images before HTML, HTML before its plain-text fallback, then text.
+    /// `Empty` is distinct from `Unavailable`: an actually empty clipboard
+    /// must be cleared again after paste, while a clipboard we failed to read
+    /// must be left alone rather than pretending we know what it contained.
+    enum SavedClipboard {
+        Files(Vec<PathBuf>),
+        Image {
+            rgba: Vec<u8>,
+            width: usize,
+            height: usize,
+        },
+        Html {
+            html: String,
+            alt_text: Option<String>,
+        },
+        Text(String),
+        Empty,
+        Unavailable,
+    }
+
+    impl SavedClipboard {
+        fn label(&self) -> &'static str {
+            match self {
+                Self::Files(_) => "files",
+                Self::Image { .. } => "image",
+                Self::Html { .. } => "HTML",
+                Self::Text(_) => "text",
+                Self::Empty => "empty",
+                Self::Unavailable => "unavailable",
+            }
+        }
+    }
 
     /// The previous clipboard contents, saved so a paste can put them back.
     /// Windows and macOS have a single clipboard, so unlike Linux there is
     /// nothing to choose between.
-    pub(crate) struct SavedSelections(Option<String>);
+    pub(crate) struct SavedSelections(SavedClipboard);
 
     /// One clipboard connection, reused for every read and write. See the
     /// Linux implementation for why the connection is kept rather than
@@ -175,10 +216,23 @@ mod platform {
             }
         }
 
-        /// Best-effort read of the clipboard: `None` if it is unavailable,
-        /// empty, or holds non-text data.
+        /// Best-effort read of the richest supported clipboard payload.
+        ///
+        /// File lists, images and HTML must be attempted before text because
+        /// those payloads commonly advertise a text representation too. If
+        /// text won the race, restoring it would silently flatten a copied
+        /// Finder item, image or rich fragment into plain text.
         pub(crate) fn save(&mut self) -> SavedSelections {
-            SavedSelections(self.connection().ok().and_then(|c| c.get_text().ok()))
+            let saved = match self.connection() {
+                Ok(connection) => save_clipboard(connection),
+                Err(err) => {
+                    tracing::warn!(
+                        "utter-inject: failed to open the clipboard before paste: {err}"
+                    );
+                    SavedClipboard::Unavailable
+                }
+            };
+            SavedSelections(saved)
         }
 
         /// Overwrites the clipboard with `text`.
@@ -188,7 +242,20 @@ mod platform {
         }
 
         fn set_one(&mut self, text: &str) -> Result<(), String> {
-            let result = self.connection()?.set_text(text).map_err(|e| e.to_string());
+            self.write(|connection| connection.set_text(text))
+        }
+
+        /// Runs one clipboard mutation and discards a connection that failed.
+        /// A native clipboard handle can become stale when its owner or the
+        /// desktop session changes; retrying through the same handle forever
+        /// would otherwise make every later dictation fail too.
+        fn write(
+            &mut self,
+            operation: impl FnOnce(&mut arboard::Clipboard) -> Result<(), arboard::Error>,
+        ) -> Result<(), String> {
+            let result = self
+                .connection()
+                .and_then(|connection| operation(connection).map_err(|e| e.to_string()));
             if result.is_err() {
                 self.connection = None;
             }
@@ -198,12 +265,204 @@ mod platform {
         /// Best-effort restore; see the Linux implementation for why a
         /// failure here is logged rather than propagated.
         pub(crate) fn restore(&mut self, previous: SavedSelections) {
-            let Some(value) = previous.0 else {
+            let saved = previous.0;
+            if matches!(saved, SavedClipboard::Unavailable) {
                 return;
-            };
-            if let Err(err) = self.set_one(&value) {
-                tracing::warn!("utter-inject: failed to restore the clipboard after paste: {err}");
             }
+
+            let label = saved.label();
+            let result = self.write(move |connection| match saved {
+                SavedClipboard::Files(files) => connection.set().file_list(&files),
+                SavedClipboard::Image {
+                    rgba,
+                    width,
+                    height,
+                } => connection.set_image(arboard::ImageData {
+                    bytes: Cow::Owned(rgba),
+                    width,
+                    height,
+                }),
+                SavedClipboard::Html { html, alt_text } => connection.set_html(html, alt_text),
+                SavedClipboard::Text(text) => connection.set_text(text),
+                SavedClipboard::Empty => connection.clear(),
+                SavedClipboard::Unavailable => Ok(()),
+            });
+            if let Err(err) = result {
+                tracing::warn!(
+                    "utter-inject: failed to restore {label} clipboard contents after paste: {err}"
+                );
+            }
+        }
+    }
+
+    fn save_clipboard(connection: &mut arboard::Clipboard) -> SavedClipboard {
+        if let Ok(files) = connection.get().file_list() {
+            if !files.is_empty() {
+                return SavedClipboard::Files(files);
+            }
+        }
+
+        if let Ok(image) = connection.get_image() {
+            return SavedClipboard::Image {
+                rgba: image.bytes.into_owned(),
+                width: image.width,
+                height: image.height,
+            };
+        }
+
+        if let Ok(html) = connection.get().html() {
+            if !html.is_empty() {
+                return SavedClipboard::Html {
+                    html,
+                    alt_text: connection.get_text().ok(),
+                };
+            }
+        }
+
+        match connection.get_text() {
+            Ok(text) if text.is_empty() => SavedClipboard::Empty,
+            Ok(text) => SavedClipboard::Text(text),
+            Err(arboard::Error::ContentNotAvailable) => SavedClipboard::Empty,
+            Err(err) => {
+                tracing::warn!("utter-inject: failed to read the clipboard before paste: {err}");
+                SavedClipboard::Unavailable
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::fmt::Display;
+        use std::fs;
+
+        use super::*;
+
+        fn step<T>(name: &str, result: Result<T, impl Display>) -> Result<T, String> {
+            result.map_err(|error| format!("{name}: {error}"))
+        }
+
+        /// Hardware-touching coverage for the common non-text formats. This
+        /// intentionally stays ignored: it replaces the real system
+        /// clipboard and requires a logged-in desktop session. Run manually
+        /// on macOS with:
+        /// `cargo test -p utter-inject restores_supported_non_text_formats -- --ignored`
+        #[test]
+        #[ignore]
+        fn restores_supported_non_text_formats() {
+            let _guard = crate::clipboard::SELECTION_TEST_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut selections = Selections::new();
+            let original = selections.save();
+
+            let result = (|| -> Result<(), String> {
+                // Image.
+                step(
+                    "write image",
+                    selections.write(|clipboard| {
+                        clipboard.set_image(arboard::ImageData {
+                            bytes: Cow::Owned(vec![12, 34, 56, 255]),
+                            width: 1,
+                            height: 1,
+                        })
+                    }),
+                )?;
+                let image = selections.save();
+                step(
+                    "replace image with transcript",
+                    selections.set_one("temporary transcript"),
+                )?;
+                selections.restore(image);
+                let restored = step(
+                    "read restored image",
+                    step(
+                        "open clipboard after image restore",
+                        selections.connection(),
+                    )?
+                    .get_image(),
+                )?;
+                if restored.width != 1 || restored.height != 1 {
+                    return Err("restored image dimensions changed".to_string());
+                }
+
+                // HTML with a plain-text alternative.
+                step(
+                    "write HTML",
+                    selections.write(|clipboard| clipboard.set_html("<b>Utter</b>", Some("Utter"))),
+                )?;
+                let html = selections.save();
+                step(
+                    "replace HTML with transcript",
+                    selections.set_one("temporary transcript"),
+                )?;
+                selections.restore(html);
+                let restored_html = step(
+                    "read restored HTML",
+                    step("open clipboard after HTML restore", selections.connection())?
+                        .get()
+                        .html(),
+                )?;
+                if !restored_html.contains("<b>Utter</b>") {
+                    return Err("restored HTML payload changed".to_string());
+                }
+
+                // File list.
+                let file = std::env::temp_dir()
+                    .join(format!("utter-clipboard-test-{}", std::process::id()));
+                step("create temporary file", fs::write(&file, b"clipboard test"))?;
+                step(
+                    "write file list",
+                    selections.write(|clipboard| clipboard.set().file_list(&[&file])),
+                )?;
+                let files = selections.save();
+                step(
+                    "replace file list with transcript",
+                    selections.set_one("temporary transcript"),
+                )?;
+                selections.restore(files);
+                let restored_files = step(
+                    "read restored file list",
+                    step(
+                        "open clipboard after file-list restore",
+                        selections.connection(),
+                    )?
+                    .get()
+                    .file_list(),
+                )?;
+                let expected_file = step("canonicalize temporary file", file.canonicalize())?;
+                let _ = fs::remove_file(&file);
+                if !restored_files.iter().any(|path| path == &expected_file) {
+                    return Err(format!(
+                        "restored file list changed: expected {expected_file:?}, got {restored_files:?}"
+                    ));
+                }
+
+                // Empty clipboard.
+                step(
+                    "clear clipboard",
+                    selections.write(arboard::Clipboard::clear),
+                )?;
+                let empty = selections.save();
+                step(
+                    "replace empty clipboard with transcript",
+                    selections.set_one("temporary transcript"),
+                )?;
+                selections.restore(empty);
+                if step(
+                    "open clipboard after empty restore",
+                    selections.connection(),
+                )?
+                .get_text()
+                .is_ok()
+                {
+                    return Err("empty clipboard was not restored".to_string());
+                }
+
+                Ok(())
+            })();
+
+            selections.restore(original);
+            result.expect("supported clipboard formats should round-trip");
         }
     }
 }
