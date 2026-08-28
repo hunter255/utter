@@ -25,6 +25,31 @@ downloads a prebuilt native archive on first build, so building with
 setup. It's optional: the default feature set (whisper.cpp + cloud STT)
 builds and runs without it.
 
+### macOS
+
+The first supported macOS development target is Apple Silicon running macOS
+13 or newer. Install Xcode Command Line Tools, Node.js 20+, stable Rust with
+`rustfmt` and `clippy`, and CMake. With Homebrew, the extra native prerequisite
+is:
+
+```sh
+brew install cmake
+```
+
+Install the frontend dependencies once, then build an unsigned application
+bundle with the same Sherpa feature used by packaged builds:
+
+```sh
+npm ci --prefix apps/desktop/ui
+cd apps/desktop/src-tauri
+../ui/node_modules/.bin/tauri build --bundles app --no-sign --features sherpa
+```
+
+The result is `target/release/bundle/macos/Utter.app`. The macOS platform
+configuration sets the deployment target and the bundle's `Info.plist`
+contains the microphone purpose string required before audio capture can be
+requested.
+
 ## Workspace layout
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the crate map, the

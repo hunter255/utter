@@ -61,9 +61,48 @@ jobs:
             libayatana-appindicator3-dev librsvg2-dev \
             pkg-config build-essential cmake
       - uses: dtolnay/rust-toolchain@stable
+        with: { components: "rustfmt, clippy" }
       - uses: Swatinem/rust-cache@v2
       # windows/macos check with the default feature set only (whisper.cpp +
       # cloud STT, no `sherpa`); utter-inject's evdev/uinput backends are
       # `#[cfg(target_os = "linux")]`-gated behind non-Linux stubs, so the
       # workspace compiles everywhere without platform-specific features.
       - run: cargo check --workspace
+      - uses: actions/setup-node@v6
+        if: matrix.os == 'macos-latest'
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/desktop/ui/package-lock.json
+      - name: Verify CMake (macOS)
+        if: matrix.os == 'macos-latest'
+        run: cmake --version
+      - name: Install frontend dependencies (macOS)
+        if: matrix.os == 'macos-latest'
+        working-directory: apps/desktop/ui
+        run: npm ci
+      - name: Rust format (macOS)
+        if: matrix.os == 'macos-latest'
+        run: cargo fmt --check
+      - name: Rust lint (macOS)
+        if: matrix.os == 'macos-latest'
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Rust tests (macOS)
+        if: matrix.os == 'macos-latest'
+        run: cargo test --workspace
+      - name: Frontend tests (macOS)
+        if: matrix.os == 'macos-latest'
+        working-directory: apps/desktop/ui
+        run: npm test
+      - name: Frontend check (macOS)
+        if: matrix.os == 'macos-latest'
+        working-directory: apps/desktop/ui
+        run: npm run check
+      - name: Frontend build (macOS)
+        if: matrix.os == 'macos-latest'
+        working-directory: apps/desktop/ui
+        run: npm run build
+      - name: Build unsigned macOS app bundle
+        if: matrix.os == 'macos-latest'
+        working-directory: apps/desktop/src-tauri
+        run: ../ui/node_modules/.bin/tauri build --bundles app --no-sign --features sherpa

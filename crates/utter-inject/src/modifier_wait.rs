@@ -12,14 +12,17 @@
 //! though the injector reports success. Waiting for a clean modifier state
 //! first avoids that race.
 
+#[cfg(any(target_os = "linux", test))]
 use std::time::{Duration, Instant};
 
 /// Upper bound on how long to wait for modifiers to clear before giving up
 /// and synthesizing the paste anyway: better a possible race than an
 /// indefinite hang if a modifier is stuck down for some unrelated reason.
+#[cfg(target_os = "linux")]
 pub(crate) const RELEASE_TIMEOUT: Duration = Duration::from_millis(1000);
 
 /// How often to re-sample modifier state while waiting.
+#[cfg(target_os = "linux")]
 pub(crate) const POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 /// Blocks the calling thread, calling `probe` every `poll_interval`, until
@@ -29,6 +32,7 @@ pub(crate) const POLL_INTERVAL: Duration = Duration::from_millis(20);
 ///
 /// Pulled out of the live evdev polling below so the retry/timeout logic
 /// itself is unit-testable without any device or real waiting.
+#[cfg(any(target_os = "linux", test))]
 pub(crate) fn wait_for_clear_with(
     timeout: Duration,
     poll_interval: Duration,
