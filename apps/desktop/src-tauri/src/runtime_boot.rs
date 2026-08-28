@@ -41,7 +41,7 @@ use utter_store::settings::{CloudSttCfg, EngineCfg, EngineKind, InjectionPrefere
 #[cfg(feature = "sherpa")]
 use utter_store::IntegrityError;
 use utter_store::{DraftCfg, LanguageProfile, ModelManager, Settings};
-use utter_stt::{CloudEngine, CloudSttConfig, WhisperEngine};
+use utter_stt::{CloudEngine, CloudSttConfig, WhisperDecodeConfig, WhisperEngine};
 
 use crate::profiles::{ProfileRegistry, RealProfileLoader};
 use crate::runtime::{EventSink, HistoryHandle, RealCaptureBackend, Runtime, RuntimeDeps};
@@ -360,12 +360,21 @@ fn build_whisper(model_id: &str, models: &ModelManager) -> (Box<dyn SttEngine>, 
         return (unavailable_engine(reason.clone()), Some(reason));
     };
 
-    match WhisperEngine::load(&path) {
+    match WhisperEngine::load_with_config(&path, whisper_decode_config(model_id)) {
         Ok(engine) => (Box::new(engine), None),
         Err(e) => {
             let reason = format!("failed to load whisper model \"{model_id}\": {e}");
             (unavailable_engine(reason.clone()), Some(reason))
         }
+    }
+}
+
+/// Returns only recipes that have been measured for the exact catalog id.
+/// Unknown and untuned models retain the previous short-utterance defaults.
+fn whisper_decode_config(model_id: &str) -> WhisperDecodeConfig {
+    match model_id {
+        "large-v3-turbo-q5_0" => WhisperDecodeConfig::anti_hallucination(),
+        _ => WhisperDecodeConfig::default(),
     }
 }
 
@@ -1035,6 +1044,23 @@ mod tests {
             .begin(&TranscribeOptions::default())
             .expect_err("an unavailable engine must fail begin() informatively");
         assert!(matches!(err, SttError::ModelNotFound(_)));
+    }
+
+    #[test]
+    fn only_benchmarked_turbo_uses_the_anti_hallucination_recipe() {
+        assert_eq!(
+            whisper_decode_config("large-v3-turbo-q5_0"),
+            WhisperDecodeConfig::anti_hallucination()
+        );
+        assert_eq!(
+            whisper_decode_config("medium"),
+            WhisperDecodeConfig::default(),
+            "an unmeasured recipe must not spill over to another model"
+        );
+        assert_eq!(
+            whisper_decode_config("future-model"),
+            WhisperDecodeConfig::default()
+        );
     }
 
     /// A configured sherpa model is a catalog id, not a filesystem path: it
