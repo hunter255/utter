@@ -106,6 +106,127 @@ impl SttEngine for FailingSttEngine {
     }
 }
 
+/// An STT engine whose `finish()` cannot return until the test opens a gate.
+/// Used for both final and draft roles wherever concurrency must be observable
+/// without relying on relative sleep durations.
+struct GatedFinishSttEngine {
+    calls: Arc<Mutex<Vec<CallRecord>>>,
+    started_tx: Sender<()>,
+    release_rx: Receiver<()>,
+    returned_tx: Sender<()>,
+}
+
+impl SttEngine for GatedFinishSttEngine {
+    fn begin(&mut self, _opts: &TranscribeOptions) -> Result<(), SttError> {
+        Ok(())
+    }
+
+    fn feed(&mut self, samples: &[i16]) -> Result<Option<String>, SttError> {
+        self.calls
+            .lock()
+            .expect("lock")
+            .push(CallRecord::Feed(samples.to_vec()));
+        Ok(Some("working preview".to_string()))
+    }
+
+    fn finish(&mut self) -> Result<Transcript, SttError> {
+        self.calls.lock().expect("lock").push(CallRecord::Finish);
+        let _ = self.started_tx.send(());
+        let _ = self.release_rx.recv();
+        let _ = self.returned_tx.send(());
+        Ok(transcript("late draft result"))
+    }
+}
+
+/// A gated authoritative engine whose live `feed` intentionally has no text,
+/// so a recovery probe can attribute `working preview` only to the restored
+/// draft engine rather than to the runtime's final-engine fallback.
+struct SilentGatedFinishSttEngine(GatedFinishSttEngine);
+
+impl SttEngine for SilentGatedFinishSttEngine {
+    fn begin(&mut self, opts: &TranscribeOptions) -> Result<(), SttError> {
+        self.0.begin(opts)
+    }
+
+    fn feed(&mut self, samples: &[i16]) -> Result<Option<String>, SttError> {
+        self.0.feed(samples).map(|_| None)
+    }
+
+    fn finish(&mut self) -> Result<Transcript, SttError> {
+        self.0.finish()
+    }
+}
+
+/// The failure twin of [`GatedFinishSttEngine`]. Keeping the error behind a
+/// gate lets cancellation/timeout win first, so tests exercise the *late*
+/// outcome policy rather than the ordinary on-time failure path.
+struct GatedFailingFinishSttEngine {
+    calls: Arc<Mutex<Vec<CallRecord>>>,
+    started_tx: Sender<()>,
+    release_rx: Receiver<()>,
+    returned_tx: Sender<()>,
+    dropped_tx: Option<Sender<()>>,
+}
+
+impl SttEngine for GatedFailingFinishSttEngine {
+    fn begin(&mut self, _opts: &TranscribeOptions) -> Result<(), SttError> {
+        Ok(())
+    }
+
+    fn feed(&mut self, samples: &[i16]) -> Result<Option<String>, SttError> {
+        self.calls
+            .lock()
+            .expect("lock")
+            .push(CallRecord::Feed(samples.to_vec()));
+        Ok(Some("working preview".to_string()))
+    }
+
+    fn finish(&mut self) -> Result<Transcript, SttError> {
+        self.calls.lock().expect("lock").push(CallRecord::Finish);
+        let _ = self.started_tx.send(());
+        let _ = self.release_rx.recv();
+        let _ = self.returned_tx.send(());
+        Err(SttError::Engine("late draft flush failed".to_string()))
+    }
+}
+
+impl Drop for GatedFailingFinishSttEngine {
+    fn drop(&mut self) {
+        if let Some(dropped_tx) = &self.dropped_tx {
+            let _ = dropped_tx.send(());
+        }
+    }
+}
+
+/// Wraps a gated engine and signals when runtime ownership is finally
+/// discarded. In the reload regression that happens only after the old
+/// generation's late outcome has crossed the global outcome channel, which
+/// also proves its atomic worker permit was released before the next session.
+struct DropNotifyingSttEngine {
+    inner: GatedFinishSttEngine,
+    dropped_tx: Sender<()>,
+}
+
+impl SttEngine for DropNotifyingSttEngine {
+    fn begin(&mut self, opts: &TranscribeOptions) -> Result<(), SttError> {
+        self.inner.begin(opts)
+    }
+
+    fn feed(&mut self, samples: &[i16]) -> Result<Option<String>, SttError> {
+        self.inner.feed(samples)
+    }
+
+    fn finish(&mut self) -> Result<Transcript, SttError> {
+        self.inner.finish()
+    }
+}
+
+impl Drop for DropNotifyingSttEngine {
+    fn drop(&mut self) {
+        let _ = self.dropped_tx.send(());
+    }
+}
+
 /// A working draft engine: emits `partial` from every `feed`, records every call into `calls`,
 /// and records the options it was begun with into `begin_opts`.
 ///
@@ -115,17 +236,15 @@ impl SttEngine for FailingSttEngine {
 /// would leave that unfalsifiable (see
 /// `the_draft_engine_begins_on_the_same_options_as_the_final_engine`).
 ///
-/// Its `finish()` transcript is deliberately a string no assertion in this file ever expects to
-/// see, because the runtime must never call `finish()` on a draft engine at all (spec D9). If
-/// that ever changed and the result were used, the injected text would name the leak rather than
-/// quietly resembling something plausible.
+/// Its `finish()` transcript is deliberately unmistakable: the runtime may show it as the final
+/// HUD preview, but must never inject it or put it in history (spec D9).
 fn draft_engine(
     partial: &str,
     calls: Arc<Mutex<Vec<CallRecord>>>,
     begin_opts: Arc<Mutex<Vec<TranscribeOptions>>>,
 ) -> Box<dyn SttEngine> {
     Box::new(FakeSttEngine {
-        result: Ok(transcript("DRAFT-FINISH-MUST-NEVER-BE-CALLED")),
+        result: Ok(transcript("DRAFT-FINAL-PREVIEW")),
         calls,
         partial: Some(partial.to_string()),
         finish_delay: Duration::ZERO,
@@ -405,13 +524,36 @@ fn recv_until(rx: &Receiver<Emission>, expected: &str) {
 
 /// Waits for the next emission that carries a partial transcript, ignoring
 /// any (e.g. the initial `"recording"` from `StartCapture`) that don't.
-fn recv_partial(rx: &Receiver<Emission>) -> Option<String> {
+fn recv_partial_emission(rx: &Receiver<Emission>) -> Emission {
     loop {
-        let (_, _, partial) = rx
+        let emission = rx
             .recv_timeout(WAIT)
             .expect("expected a dictation-state emission within the timeout");
-        if partial.is_some() {
-            return partial;
+        if emission.2.is_some() {
+            return emission;
+        }
+    }
+}
+
+fn recv_partial(rx: &Receiver<Emission>) -> Option<String> {
+    recv_partial_emission(rx).2
+}
+
+/// Bounded probe used by late-restoration regressions. If a press races the
+/// worker's outcome-channel receive, that session has no draft engine yet;
+/// the test cancels it and retries after the resulting Idle boundary drains
+/// the queued outcome.
+fn recv_partial_before(rx: &Receiver<Emission>, timeout: Duration) -> Option<String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return None;
+        }
+        match rx.recv_timeout(remaining) {
+            Ok((_, _, Some(partial))) => return Some(partial),
+            Ok(_) => {}
+            Err(_) => return None,
         }
     }
 }
@@ -1170,6 +1312,329 @@ fn cancel_after_finish_before_transcript_ready_injects_nothing() {
     assert_eq!(recv_state(&states_rx), "idle");
     assert!(injected.lock().expect("lock").is_empty());
     assert_no_more_states(&states_rx);
+
+    handle.shutdown();
+}
+
+/// A draft result can already be available while the authoritative engine is
+/// still finishing. Cancellation at that boundary suppresses both injection
+/// and the flushed HUD preview: accessory text must not be emitted after the
+/// user has cancelled merely because its worker won the race.
+#[test]
+fn cancel_before_transcript_ready_suppresses_flushed_draft_preview() {
+    let final_calls = Arc::new(Mutex::new(Vec::new()));
+    let draft_calls = Arc::new(Mutex::new(Vec::new()));
+    let injected = Arc::new(Mutex::new(Vec::new()));
+    let (final_started_tx, final_started_rx) = unbounded();
+    let (final_release_tx, final_release_rx) = unbounded();
+    let (final_returned_tx, final_returned_rx) = unbounded();
+    let (draft_started_tx, draft_started_rx) = unbounded();
+    let (draft_release_tx, draft_release_rx) = unbounded();
+    let (draft_returned_tx, draft_returned_rx) = unbounded();
+    let (sink, states_rx, notices_rx) = fake_sink();
+
+    let (hotkey_tx, hotkey_rx) = unbounded();
+    let mut builder = DepsBuilder::new(Ok(transcript("unused fixture result")));
+    builder.engine = Some(Box::new(GatedFinishSttEngine {
+        calls: final_calls,
+        started_tx: final_started_tx,
+        release_rx: final_release_rx,
+        returned_tx: final_returned_tx,
+    }));
+    builder.draft_engine = Some(Box::new(GatedFinishSttEngine {
+        calls: draft_calls,
+        started_tx: draft_started_tx,
+        release_rx: draft_release_rx,
+        returned_tx: draft_returned_tx,
+    }));
+    builder.injected = injected.clone();
+    let handle = Runtime::spawn(builder.build(hotkey_rx), sink);
+
+    hotkey_tx
+        .send(HotkeyEvent::Pressed {
+            binding: BindingId::from(0),
+        })
+        .expect("send pressed");
+    assert_eq!(recv_state(&states_rx), "recording");
+    hotkey_tx
+        .send(HotkeyEvent::Released {
+            binding: BindingId::from(0),
+        })
+        .expect("send released");
+    assert_eq!(recv_state(&states_rx), "transcribing");
+    final_started_rx
+        .recv_timeout(WAIT)
+        .expect("authoritative finish should reach its gate");
+    draft_started_rx
+        .recv_timeout(WAIT)
+        .expect("draft finish should reach its gate");
+
+    // Make the draft result genuinely ready before cancellation. Without
+    // this handshake the test could pass merely because there was no flushed
+    // text available to suppress.
+    let _ = draft_release_tx.send(());
+    draft_returned_rx
+        .recv_timeout(WAIT)
+        .expect("released draft finish should return before cancel");
+
+    handle.cancel();
+    let _ = final_release_tx.send(());
+    final_returned_rx
+        .recv_timeout(WAIT)
+        .expect("released authoritative finish should return");
+
+    let mut partials_after_cancel = Vec::new();
+    loop {
+        let (state, _, partial) = states_rx
+            .recv_timeout(WAIT)
+            .expect("cancelled session should return to idle");
+        if let Some(partial) = partial {
+            partials_after_cancel.push(partial);
+        }
+        if state == "idle" {
+            break;
+        }
+    }
+
+    assert!(
+        partials_after_cancel.is_empty(),
+        "cancel must suppress the already-available flushed draft preview, got {partials_after_cancel:?}"
+    );
+    assert!(
+        injected.lock().expect("lock").is_empty(),
+        "cancel must suppress the authoritative transcript too"
+    );
+    assert_no_more_notices(&notices_rx);
+
+    handle.shutdown();
+}
+
+/// Cancelling while a draft flush is still inside native code must neither
+/// wait nor discard that engine. Once its healthy late outcome is processed
+/// after Idle, the same profile previews and finishes normally again without
+/// a settings reload.
+#[test]
+fn cancelled_pending_draft_recovers_without_reload() {
+    let final_calls = Arc::new(Mutex::new(Vec::new()));
+    let draft_calls = Arc::new(Mutex::new(Vec::new()));
+    let injected = Arc::new(Mutex::new(Vec::new()));
+    let capture_tx_slot = Arc::new(Mutex::new(None));
+    let (final_started_tx, final_started_rx) = unbounded();
+    let (final_release_tx, final_release_rx) = unbounded();
+    let (final_returned_tx, final_returned_rx) = unbounded();
+    let (draft_started_tx, draft_started_rx) = unbounded();
+    let (draft_release_tx, draft_release_rx) = unbounded();
+    let (draft_returned_tx, draft_returned_rx) = unbounded();
+    let (sink, states_rx, notices_rx) = fake_sink();
+
+    let (hotkey_tx, hotkey_rx) = unbounded();
+    let mut builder = DepsBuilder::new(Ok(transcript("unused fixture result")));
+    builder.engine = Some(Box::new(SilentGatedFinishSttEngine(GatedFinishSttEngine {
+        calls: final_calls,
+        started_tx: final_started_tx,
+        release_rx: final_release_rx,
+        returned_tx: final_returned_tx,
+    })));
+    builder.draft_engine = Some(Box::new(GatedFinishSttEngine {
+        calls: draft_calls.clone(),
+        started_tx: draft_started_tx,
+        release_rx: draft_release_rx,
+        returned_tx: draft_returned_tx,
+    }));
+    builder.injected = injected.clone();
+    builder.capture_tx_slot = capture_tx_slot.clone();
+    let handle = Runtime::spawn(builder.build(hotkey_rx), sink);
+
+    hotkey_tx
+        .send(HotkeyEvent::Pressed {
+            binding: BindingId::from(0),
+        })
+        .expect("send first pressed");
+    recv_until(&states_rx, "recording");
+    capture_tx(&capture_tx_slot)
+        .send(CaptureEvent::Frame(AudioFrame {
+            samples: vec![31, 32, 33],
+        }))
+        .expect("send first frame");
+    assert_eq!(recv_partial(&states_rx).as_deref(), Some("working preview"));
+    hotkey_tx
+        .send(HotkeyEvent::Released {
+            binding: BindingId::from(0),
+        })
+        .expect("send first released");
+    recv_until(&states_rx, "transcribing");
+    final_started_rx
+        .recv_timeout(WAIT)
+        .expect("first final finish should block");
+    draft_started_rx
+        .recv_timeout(WAIT)
+        .expect("first draft finish should block");
+
+    handle.cancel();
+    let _ = final_release_tx.send(());
+    final_returned_rx
+        .recv_timeout(WAIT)
+        .expect("cancelled final finish should return");
+
+    let mut partials_after_cancel = Vec::new();
+    loop {
+        let (state, _, partial) = states_rx
+            .recv_timeout(WAIT)
+            .expect("cancelled pending session should return to idle");
+        if let Some(partial) = partial {
+            partials_after_cancel.push(partial);
+        }
+        if state == "idle" {
+            break;
+        }
+    }
+    assert!(
+        partials_after_cancel.is_empty(),
+        "cancel must never emit the pending flushed preview, got {partials_after_cancel:?}"
+    );
+    assert!(injected.lock().expect("lock").is_empty());
+    assert_no_more_notices(&notices_rx);
+
+    // Release only after Idle, then wait for both native return and observable
+    // runtime recovery. The bounded probe handles the tiny channel/select
+    // race by cancelling an empty-preview probe and trying after its Idle
+    // boundary; success itself proves the outcome was processed and restored.
+    let _ = draft_release_tx.send(());
+    draft_returned_rx
+        .recv_timeout(WAIT)
+        .expect("cancelled draft worker should return after release");
+    let recovery_deadline = Instant::now() + WAIT;
+    loop {
+        hotkey_tx
+            .send(HotkeyEvent::Pressed {
+                binding: BindingId::from(0),
+            })
+            .expect("send recovery-probe pressed");
+        recv_until(&states_rx, "recording");
+        capture_tx(&capture_tx_slot)
+            .send(CaptureEvent::Frame(AudioFrame {
+                samples: vec![41, 42, 43],
+            }))
+            .expect("send recovery-probe frame");
+        if recv_partial_before(&states_rx, Duration::from_millis(100)).as_deref()
+            == Some("working preview")
+        {
+            break;
+        }
+        handle.cancel();
+        recv_until(&states_rx, "idle");
+        assert!(
+            Instant::now() < recovery_deadline,
+            "cancelled draft outcome should restore this profile within {WAIT:?}"
+        );
+    }
+
+    hotkey_tx
+        .send(HotkeyEvent::Released {
+            binding: BindingId::from(0),
+        })
+        .expect("send recovered-profile released");
+    recv_until(&states_rx, "transcribing");
+    final_started_rx
+        .recv_timeout(WAIT)
+        .expect("recovered final finish should start");
+    draft_started_rx
+        .recv_timeout(WAIT)
+        .expect("recovered draft should finish without reload");
+    let _ = draft_release_tx.send(());
+    let _ = final_release_tx.send(());
+    draft_returned_rx
+        .recv_timeout(WAIT)
+        .expect("recovered draft finish should return");
+    final_returned_rx
+        .recv_timeout(WAIT)
+        .expect("recovered final finish should return");
+    recv_until(&states_rx, "injecting");
+    recv_until(&states_rx, "idle");
+
+    assert_eq!(*injected.lock().expect("lock"), vec!["late draft result"]);
+    assert_eq!(
+        draft_calls
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|call| **call == CallRecord::Finish)
+            .count(),
+        2,
+        "the cancelled worker and recovered session should each finish once"
+    );
+    assert_no_more_notices(&notices_rx);
+
+    handle.shutdown();
+}
+
+/// Cancellation itself is silent, but it must not hide a genuine model
+/// failure that becomes known later. The eventual error removes preview and
+/// produces exactly one informational notice without reviving cancelled HUD
+/// or injected text.
+#[test]
+fn late_draft_failure_after_cancel_is_reported_once() {
+    let injected = Arc::new(Mutex::new(Vec::new()));
+    let (final_started_tx, final_started_rx) = unbounded();
+    let (final_release_tx, final_release_rx) = unbounded();
+    let (final_returned_tx, final_returned_rx) = unbounded();
+    let (draft_started_tx, draft_started_rx) = unbounded();
+    let (draft_release_tx, draft_release_rx) = unbounded();
+    let (draft_returned_tx, draft_returned_rx) = unbounded();
+    let (sink, states_rx, notices_rx) = fake_sink();
+
+    let (hotkey_tx, hotkey_rx) = unbounded();
+    let mut builder = DepsBuilder::new(Ok(transcript("unused fixture result")));
+    builder.engine = Some(Box::new(GatedFinishSttEngine {
+        calls: Arc::new(Mutex::new(Vec::new())),
+        started_tx: final_started_tx,
+        release_rx: final_release_rx,
+        returned_tx: final_returned_tx,
+    }));
+    builder.draft_engine = Some(Box::new(GatedFailingFinishSttEngine {
+        calls: Arc::new(Mutex::new(Vec::new())),
+        started_tx: draft_started_tx,
+        release_rx: draft_release_rx,
+        returned_tx: draft_returned_tx,
+        dropped_tx: None,
+    }));
+    builder.injected = injected.clone();
+    let handle = Runtime::spawn(builder.build(hotkey_rx), sink);
+
+    hotkey_tx
+        .send(HotkeyEvent::Pressed {
+            binding: BindingId::from(0),
+        })
+        .expect("send pressed");
+    recv_until(&states_rx, "recording");
+    hotkey_tx
+        .send(HotkeyEvent::Released {
+            binding: BindingId::from(0),
+        })
+        .expect("send released");
+    recv_until(&states_rx, "transcribing");
+    final_started_rx
+        .recv_timeout(WAIT)
+        .expect("final finish should block");
+    draft_started_rx
+        .recv_timeout(WAIT)
+        .expect("draft finish should block");
+
+    handle.cancel();
+    let _ = final_release_tx.send(());
+    final_returned_rx
+        .recv_timeout(WAIT)
+        .expect("cancelled final finish should return");
+    recv_until(&states_rx, "idle");
+    assert!(injected.lock().expect("lock").is_empty());
+    assert_no_more_notices(&notices_rx);
+
+    let _ = draft_release_tx.send(());
+    draft_returned_rx
+        .recv_timeout(WAIT)
+        .expect("late failing draft should return");
+    assert_preview_lost_notice(&notices_rx);
+    assert_no_more_notices(&notices_rx);
 
     handle.shutdown();
 }
@@ -2145,8 +2610,8 @@ fn pressing_an_unregistered_binding_starts_no_session() {
 /// The fan-out itself, stated as the contract actually is: **while the session is recording**, a
 /// profile's draft engine is fed every frame its final engine is, with the same samples in the
 /// same order. (Frames drained after capture stops reach the final engine alone -- see
-/// `stop_capture_and_maybe_transcribe` -- so the two logs are equal only over the recording
-/// window, and this test does not claim otherwise.)
+/// `stop_capture_and_maybe_transcribe` -- so the two feed logs are equal only over the recording
+/// window.) Once that window closes, the draft is finished exactly once to flush its decoder.
 ///
 /// The hotkey is released only once the draft engine has been observed to receive both frames,
 /// which is what makes the assertion deterministic: the `select!` loop, not the test, decides
@@ -2219,14 +2684,17 @@ fn both_engines_are_fed_the_same_frames_while_recording() {
          the trailing drain may have added: got {:?}",
         fed_samples(&final_calls)
     );
-    assert!(
-        !draft_calls
-            .lock()
-            .expect("lock")
-            .contains(&CallRecord::Finish),
-        "finish() must never be called on the draft engine: not producing a draft transcript at \
-         all is what makes it structurally impossible for one to be injected (spec D9)"
+    let draft = draft_calls.lock().expect("lock");
+    assert_eq!(
+        draft
+            .iter()
+            .filter(|call| **call == CallRecord::Finish)
+            .count(),
+        1,
+        "the draft decoder must be finished exactly once after recording stops, got {draft:?}"
     );
+    assert_eq!(draft.last(), Some(&CallRecord::Finish));
+    drop(draft);
 
     handle.shutdown();
 }
@@ -2262,7 +2730,20 @@ fn the_draft_engine_begins_on_the_same_options_as_the_final_engine() {
 
     let handle = Runtime::spawn(deps, sink);
 
-    press_and_release(&hotkey_tx, &states_rx, BindingId::from(0));
+    hotkey_tx
+        .send(HotkeyEvent::Pressed {
+            binding: BindingId::from(0),
+        })
+        .expect("send pressed");
+    assert_eq!(recv_state(&states_rx), "recording");
+    hotkey_tx
+        .send(HotkeyEvent::Released {
+            binding: BindingId::from(0),
+        })
+        .expect("send released");
+    recv_until(&states_rx, "transcribing");
+    recv_until(&states_rx, "injecting");
+    recv_until(&states_rx, "idle");
 
     let final_begun = final_opts.lock().expect("lock");
     assert_eq!(final_begun.len(), 1);
@@ -2289,10 +2770,10 @@ fn the_draft_engine_begins_on_the_same_options_as_the_final_engine() {
     handle.shutdown();
 }
 
-/// Spec D9: the draft engine drives the preview and nothing else. The three strings here are
-/// deliberately unmistakable for one another -- the draft's partial, the final engine's own
-/// partial, and the final transcript -- because a fixture where any two could coincide would let
-/// a leak pass unnoticed, which is the exact failure mode this branch has hit before.
+/// Spec D9: the draft engine drives the preview and nothing else. The four strings here are
+/// deliberately unmistakable for one another -- the draft's live partial, its flushed final
+/// preview, the final engine's own partial, and the final transcript -- because a fixture where
+/// any two could coincide would let a leak pass unnoticed.
 ///
 /// The preview assertion is what keeps the rest from being vacuous: it proves the draft engine
 /// really was running and its text really was in play at the moment the final transcript was
@@ -2348,6 +2829,9 @@ fn draft_text_never_reaches_the_injected_result_or_history() {
         })
         .expect("send released");
     recv_until(&states_rx, "transcribing");
+    let (phase, _, flushed_preview) = recv_partial_emission(&states_rx);
+    assert_eq!(phase, "transcribing");
+    assert_eq!(flushed_preview.as_deref(), Some("DRAFT-FINAL-PREVIEW"));
     recv_until(&states_rx, "injecting");
     recv_until(&states_rx, "idle");
 
@@ -2442,6 +2926,489 @@ fn a_failing_draft_engine_does_not_break_dictation() {
         vec![vec![1i16, 2, 3]],
         "the draft engine must be dropped after its first failure, not fed the frames that follow"
     );
+
+    handle.shutdown();
+}
+
+/// A draft can decode every live frame successfully and still fail while flushing its trailing
+/// context. That failure disables only future previews: the authoritative engine must still be
+/// finished, injected and reported as a successful dictation.
+#[test]
+fn a_draft_engine_that_fails_to_finish_does_not_break_dictation() {
+    let draft_calls = Arc::new(Mutex::new(Vec::new()));
+    let injected = Arc::new(Mutex::new(Vec::new()));
+    let tx_slot = Arc::new(Mutex::new(None));
+    let (sink, states_rx, notices_rx) = fake_sink();
+
+    let (hotkey_tx, hotkey_rx) = unbounded();
+    let mut builder = DepsBuilder::new(Ok(transcript("authoritative result")));
+    builder.draft_engine = Some(Box::new(FakeSttEngine {
+        result: Err(SttError::Engine("draft flush failed".to_string())),
+        calls: draft_calls.clone(),
+        partial: Some("working preview".to_string()),
+        finish_delay: Duration::ZERO,
+        begin_opts: Arc::new(Mutex::new(Vec::new())),
+    }));
+    builder.injected = injected.clone();
+    builder.capture_tx_slot = tx_slot.clone();
+    let deps = builder.build(hotkey_rx);
+
+    let handle = Runtime::spawn(deps, sink);
+
+    hotkey_tx
+        .send(HotkeyEvent::Pressed {
+            binding: BindingId::from(0),
+        })
+        .expect("send pressed");
+    assert_eq!(recv_state(&states_rx), "recording");
+
+    capture_tx(&tx_slot)
+        .send(CaptureEvent::Frame(AudioFrame {
+            samples: vec![7, 8, 9],
+        }))
+        .expect("send frame");
+    wait_for_feeds(&draft_calls, 1);
+
+    hotkey_tx
+        .send(HotkeyEvent::Released {
+            binding: BindingId::from(0),
+        })
+        .expect("send released");
+
+    recv_until(&states_rx, "transcribing");
+    recv_until(&states_rx, "injecting");
+    recv_until(&states_rx, "idle");
+
+    assert_eq!(
+        *injected.lock().expect("lock"),
+        vec!["authoritative result"],
+        "a draft flush failure must not prevent the final result from being injected"
+    );
+    assert_preview_lost_notice(&notices_rx);
+    assert_no_more_notices(&notices_rx);
+    assert_eq!(
+        *draft_calls.lock().expect("lock"),
+        vec![CallRecord::Feed(vec![7, 8, 9]), CallRecord::Finish],
+        "the draft must be finished once after its successful live feed"
+    );
+
+    handle.shutdown();
+}
+
+/// A preview flush is accessory work even when it never returns. Keep its
+/// gate closed until the authoritative text has actually reached the
+/// injector: a serial implementation deadlocks on that ordering, while the
+/// bounded concurrent implementation disables the preview and injects well
+/// before this test releases it.
+#[test]
+fn a_blocked_draft_finish_cannot_delay_authoritative_injection() {
+    let draft_calls = Arc::new(Mutex::new(Vec::new()));
+    let injected = Arc::new(Mutex::new(Vec::new()));
+    let capture_tx_slot = Arc::new(Mutex::new(None));
+    let (finish_started_tx, finish_started_rx) = unbounded();
+    let (finish_release_tx, finish_release_rx) = unbounded();
+    let (finish_returned_tx, finish_returned_rx) = unbounded();
+    let (sink, states_rx, notices_rx) = fake_sink();
+
+    let (hotkey_tx, hotkey_rx) = unbounded();
+    let mut builder = DepsBuilder::new(Ok(transcript("authoritative result")));
+    builder.draft_engine = Some(Box::new(GatedFinishSttEngine {
+        calls: draft_calls.clone(),
+        started_tx: finish_started_tx,
+        release_rx: finish_release_rx,
+        returned_tx: finish_returned_tx,
+    }));
+    builder.injected = injected.clone();
+    builder.capture_tx_slot = capture_tx_slot.clone();
+    let deps = builder.build(hotkey_rx);
+
+    let handle = Runtime::spawn(deps, sink);
+
+    hotkey_tx
+        .send(HotkeyEvent::Pressed {
+            binding: BindingId::from(0),
+        })
+        .expect("send pressed");
+    assert_eq!(recv_state(&states_rx), "recording");
+    hotkey_tx
+        .send(HotkeyEvent::Released {
+            binding: BindingId::from(0),
+        })
+        .expect("send released");
+    recv_until(&states_rx, "transcribing");
+
+    let draft_started = finish_started_rx.recv_timeout(WAIT).is_ok();
+
+    // Do not open the gate yet. The final result must cross the real
+    // injector boundary while draft `finish()` is provably still blocked.
+    let injection_deadline = Instant::now() + WAIT;
+    let injected_before_draft_release = loop {
+        if !injected.lock().expect("lock").is_empty() {
+            break true;
+        }
+        if Instant::now() >= injection_deadline {
+            break false;
+        }
+        thread::sleep(Duration::from_millis(5));
+    };
+
+    // Always release the detached fixture thread before asserting, including
+    // on a regression, so a failed test cannot strand a blocked thread in
+    // the shared integration-test process.
+    let _ = finish_release_tx.send(());
+    let draft_returned = finish_returned_rx.recv_timeout(WAIT).is_ok();
+
+    assert!(
+        draft_started,
+        "draft finish should have started on its worker"
+    );
+    assert!(
+        injected_before_draft_release,
+        "the authoritative result must be injected promptly while draft finish remains blocked"
+    );
+    assert!(draft_returned, "the released draft worker should return");
+    recv_until(&states_rx, "idle");
+
+    assert_eq!(
+        *injected.lock().expect("lock"),
+        vec!["authoritative result"],
+        "only the final engine's result may be injected"
+    );
+    assert_preview_lost_notice(&notices_rx);
+    assert_eq!(
+        draft_calls
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|call| **call == CallRecord::Finish)
+            .count(),
+        1,
+        "the timed-out draft must still be finished exactly once"
+    );
+
+    // The worker's `returned` signal comes just before it posts ownership to
+    // the runtime channel. Probe through the real live-preview path instead
+    // of assuming those two events are the same. If the first press wins the
+    // select race, cancel that empty-preview session; its Idle boundary drains
+    // the outcome, and the bounded retry observes the restored engine.
+    let restore_deadline = Instant::now() + WAIT;
+    loop {
+        hotkey_tx
+            .send(HotkeyEvent::Pressed {
+                binding: BindingId::from(0),
+            })
+            .expect("send restored-profile pressed");
+        recv_until(&states_rx, "recording");
+        capture_tx(&capture_tx_slot)
+            .send(CaptureEvent::Frame(AudioFrame {
+                samples: vec![21, 22, 23],
+            }))
+            .expect("send restoration probe frame");
+        if recv_partial_before(&states_rx, Duration::from_millis(100)).as_deref()
+            == Some("working preview")
+        {
+            break;
+        }
+        handle.cancel();
+        recv_until(&states_rx, "idle");
+        assert!(
+            Instant::now() < restore_deadline,
+            "late healthy outcome should be processed and restore live preview within {WAIT:?}"
+        );
+    }
+
+    // Keep the restored engine's second finish blocked too. This produces a
+    // second real timeout while authoritative injection remains prompt, but
+    // the runtime-lifetime timeout latch must suppress a duplicate notice.
+    hotkey_tx
+        .send(HotkeyEvent::Released {
+            binding: BindingId::from(0),
+        })
+        .expect("send restored-profile released");
+    recv_until(&states_rx, "transcribing");
+    finish_started_rx
+        .recv_timeout(WAIT)
+        .expect("late healthy draft should be restored for the next session");
+
+    let second_injection_deadline = Instant::now() + WAIT;
+    loop {
+        if injected.lock().expect("lock").len() >= 2 {
+            break;
+        }
+        assert!(
+            Instant::now() < second_injection_deadline,
+            "second authoritative result should be injected while its draft finish is blocked"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+
+    let _ = finish_release_tx.send(());
+    finish_returned_rx
+        .recv_timeout(WAIT)
+        .expect("restored draft finish should return");
+    recv_until(&states_rx, "injecting");
+    recv_until(&states_rx, "idle");
+
+    assert_eq!(
+        *injected.lock().expect("lock"),
+        vec!["authoritative result", "authoritative result"]
+    );
+    assert_eq!(
+        draft_calls
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|call| **call == CallRecord::Finish)
+            .count(),
+        2,
+        "late restoration should make the draft reusable and time out a second time without reload"
+    );
+    assert_no_more_notices(&notices_rx);
+
+    handle.shutdown();
+}
+
+/// Once the bounded collector has reported a timeout, the same worker's
+/// eventual decoder error carries no new action for the user. Its late
+/// outcome is consumed, but it must not duplicate the existing notice.
+#[test]
+fn late_draft_failure_after_timeout_does_not_duplicate_notice() {
+    let injected = Arc::new(Mutex::new(Vec::new()));
+    let (draft_started_tx, draft_started_rx) = unbounded();
+    let (draft_release_tx, draft_release_rx) = unbounded();
+    let (draft_returned_tx, draft_returned_rx) = unbounded();
+    let (draft_dropped_tx, draft_dropped_rx) = unbounded();
+    let (sink, states_rx, notices_rx) = fake_sink();
+
+    let (hotkey_tx, hotkey_rx) = unbounded();
+    let mut builder = DepsBuilder::new(Ok(transcript("authoritative result")));
+    builder.draft_engine = Some(Box::new(GatedFailingFinishSttEngine {
+        calls: Arc::new(Mutex::new(Vec::new())),
+        started_tx: draft_started_tx,
+        release_rx: draft_release_rx,
+        returned_tx: draft_returned_tx,
+        dropped_tx: Some(draft_dropped_tx),
+    }));
+    builder.injected = injected.clone();
+    let handle = Runtime::spawn(builder.build(hotkey_rx), sink);
+
+    hotkey_tx
+        .send(HotkeyEvent::Pressed {
+            binding: BindingId::from(0),
+        })
+        .expect("send pressed");
+    recv_until(&states_rx, "recording");
+    hotkey_tx
+        .send(HotkeyEvent::Released {
+            binding: BindingId::from(0),
+        })
+        .expect("send released");
+    recv_until(&states_rx, "transcribing");
+    draft_started_rx
+        .recv_timeout(WAIT)
+        .expect("draft finish should remain blocked through timeout");
+    recv_until(&states_rx, "injecting");
+    recv_until(&states_rx, "idle");
+
+    assert_eq!(
+        *injected.lock().expect("lock"),
+        vec!["authoritative result"]
+    );
+    assert_preview_lost_notice(&notices_rx);
+
+    let _ = draft_release_tx.send(());
+    draft_returned_rx
+        .recv_timeout(WAIT)
+        .expect("late failing draft should return after release");
+    draft_dropped_rx
+        .recv_timeout(WAIT)
+        .expect("runtime should consume the late outcome and drop its failed engine");
+    assert_no_more_notices(&notices_rx);
+
+    handle.shutdown();
+}
+
+/// A stuck native flush limits only background *finish workers*, not live
+/// preview engines. Across a reload, the new profile must keep receiving and
+/// previewing frames; its first flush is skipped while the old worker lives,
+/// then the very next session can finish normally once the old outcome has
+/// been discarded — no second reload required.
+#[test]
+fn a_stuck_draft_worker_guard_survives_reload_and_blocks_a_second_finish() {
+    let first_draft_calls = Arc::new(Mutex::new(Vec::new()));
+    let second_draft_calls = Arc::new(Mutex::new(Vec::new()));
+    let first_injected = Arc::new(Mutex::new(Vec::new()));
+    let second_injected = Arc::new(Mutex::new(Vec::new()));
+    let second_capture_tx_slot = Arc::new(Mutex::new(None));
+
+    let (first_draft_started_tx, first_draft_started_rx) = unbounded();
+    let (first_draft_release_tx, first_draft_release_rx) = unbounded();
+    let (first_draft_returned_tx, first_draft_returned_rx) = unbounded();
+    let (first_draft_dropped_tx, first_draft_dropped_rx) = unbounded();
+    let (first_final_started_tx, first_final_started_rx) = unbounded();
+    let (first_final_release_tx, first_final_release_rx) = unbounded();
+    let (first_final_returned_tx, first_final_returned_rx) = unbounded();
+    let (second_draft_started_tx, second_draft_started_rx) = unbounded();
+    let (second_draft_release_tx, second_draft_release_rx) = unbounded();
+    let (second_draft_returned_tx, second_draft_returned_rx) = unbounded();
+    let (sink, states_rx, notices_rx) = fake_sink();
+
+    let (first_hotkey_tx, first_hotkey_rx) = unbounded();
+    let mut first_builder = DepsBuilder::new(Ok(transcript("unused first result")));
+    first_builder.engine = Some(Box::new(GatedFinishSttEngine {
+        calls: Arc::new(Mutex::new(Vec::new())),
+        started_tx: first_final_started_tx,
+        release_rx: first_final_release_rx,
+        returned_tx: first_final_returned_tx,
+    }));
+    first_builder.draft_engine = Some(Box::new(DropNotifyingSttEngine {
+        inner: GatedFinishSttEngine {
+            calls: first_draft_calls.clone(),
+            started_tx: first_draft_started_tx,
+            release_rx: first_draft_release_rx,
+            returned_tx: first_draft_returned_tx,
+        },
+        dropped_tx: first_draft_dropped_tx,
+    }));
+    first_builder.injected = first_injected.clone();
+    let handle = Runtime::spawn(first_builder.build(first_hotkey_rx), sink);
+
+    first_hotkey_tx
+        .send(HotkeyEvent::Pressed {
+            binding: BindingId::from(0),
+        })
+        .expect("send first pressed");
+    assert_eq!(recv_state(&states_rx), "recording");
+    first_hotkey_tx
+        .send(HotkeyEvent::Released {
+            binding: BindingId::from(0),
+        })
+        .expect("send first released");
+    assert_eq!(recv_state(&states_rx), "transcribing");
+    first_draft_started_rx
+        .recv_timeout(WAIT)
+        .expect("first draft finish should block at its gate");
+    first_final_started_rx
+        .recv_timeout(WAIT)
+        .expect("first final finish should block at its gate");
+
+    handle.cancel();
+    let _ = first_final_release_tx.send(());
+    first_final_returned_rx
+        .recv_timeout(WAIT)
+        .expect("first final finish should return after release");
+    recv_until(&states_rx, "idle");
+
+    // Keep the first draft gate closed across the reload. The new profile's
+    // engine must remain installed and useful for live feed even though its
+    // optional flush cannot start yet.
+    let (second_hotkey_tx, second_hotkey_rx) = unbounded();
+    let mut second_builder = DepsBuilder::new(Ok(transcript("second result")));
+    second_builder.draft_engine = Some(Box::new(GatedFinishSttEngine {
+        calls: second_draft_calls.clone(),
+        started_tx: second_draft_started_tx,
+        release_rx: second_draft_release_rx,
+        returned_tx: second_draft_returned_tx,
+    }));
+    second_builder.injected = second_injected.clone();
+    second_builder.capture_tx_slot = second_capture_tx_slot.clone();
+    handle.reload(second_builder.build(second_hotkey_rx));
+
+    second_hotkey_tx
+        .send(HotkeyEvent::Pressed {
+            binding: BindingId::from(0),
+        })
+        .expect("send second pressed");
+    recv_until(&states_rx, "recording");
+    capture_tx(&second_capture_tx_slot)
+        .send(CaptureEvent::Frame(AudioFrame {
+            samples: vec![11, 12, 13],
+        }))
+        .expect("send second-profile frame");
+    assert_eq!(
+        recv_partial(&states_rx).as_deref(),
+        Some("working preview"),
+        "a stuck old flush must not remove the new profile's live preview engine"
+    );
+    second_hotkey_tx
+        .send(HotkeyEvent::Released {
+            binding: BindingId::from(0),
+        })
+        .expect("send second released");
+    recv_until(&states_rx, "transcribing");
+    recv_until(&states_rx, "injecting");
+    recv_until(&states_rx, "idle");
+
+    let second_finish_started_while_busy = second_draft_started_rx.try_recv().is_ok();
+    if second_finish_started_while_busy {
+        // Clean up both gates before failing so a regression cannot strand
+        // background fixtures in the integration-test process.
+        let _ = second_draft_release_tx.send(());
+        let _ = first_draft_release_tx.send(());
+        let _ = second_draft_returned_rx.recv_timeout(WAIT);
+        let _ = first_draft_returned_rx.recv_timeout(WAIT);
+    }
+    assert!(
+        !second_finish_started_while_busy,
+        "the runtime must not start a second finish worker while the old one is alive"
+    );
+
+    // Release the old generation and wait until its engine is actually
+    // discarded by the runtime. The worker clears its atomic permit before
+    // publishing that outcome, so this handshake makes the next-session
+    // assertion deterministic rather than timing-based.
+    let _ = first_draft_release_tx.send(());
+    first_draft_returned_rx
+        .recv_timeout(WAIT)
+        .expect("released old draft should return");
+    first_draft_dropped_rx
+        .recv_timeout(WAIT)
+        .expect("old-generation outcome should be discarded after reload");
+
+    // No further reload: the same second-profile engine survived the skipped
+    // flush, begins a fresh stream, and can now acquire the worker permit.
+    second_hotkey_tx
+        .send(HotkeyEvent::Pressed {
+            binding: BindingId::from(0),
+        })
+        .expect("send third pressed");
+    recv_until(&states_rx, "recording");
+    second_hotkey_tx
+        .send(HotkeyEvent::Released {
+            binding: BindingId::from(0),
+        })
+        .expect("send third released");
+    recv_until(&states_rx, "transcribing");
+    second_draft_started_rx
+        .recv_timeout(WAIT)
+        .expect("next session should start draft finish after old worker exits");
+    let _ = second_draft_release_tx.send(());
+    second_draft_returned_rx
+        .recv_timeout(WAIT)
+        .expect("released second-profile finish should return");
+    recv_until(&states_rx, "injecting");
+    recv_until(&states_rx, "idle");
+
+    assert!(
+        first_injected.lock().expect("lock").is_empty(),
+        "the cancelled first session must inject nothing"
+    );
+    assert_eq!(
+        *second_injected.lock().expect("lock"),
+        vec!["second result", "second result"],
+        "both reloaded-profile sessions must dictate with the authoritative engine"
+    );
+    assert_eq!(
+        second_draft_calls
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|call| **call == CallRecord::Finish)
+            .count(),
+        1,
+        "busy session skips flush, then the next session finishes the preserved engine exactly once"
+    );
+    assert_no_more_notices(&notices_rx);
 
     handle.shutdown();
 }

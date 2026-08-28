@@ -52,14 +52,18 @@
 //!
 //! The fan-out ends there. The trailing frames drained after capture stops
 //! reach the final engine alone; [`stop_capture_and_maybe_transcribe`] says
-//! why.
+//! why. Once recording has stopped, the draft engine is normally finished
+//! once so a streaming decoder can flush its own trailing context. If an
+//! earlier native flush is still stuck, this optional flush is skipped while
+//! live preview remains available. An on-time result is collected through a
+//! bounded side channel before the authoritative result is committed.
 //!
 //! Spec D9 requires that this preview can never influence the injected text.
-//! That is enforced structurally rather than by care: [`begin_draft`] and
-//! [`feed_draft`] are the *only* calls ever made on a draft engine, so no
-//! draft transcript is ever produced, so there is nothing that could be
-//! mistaken for one. `finish()` on it would look like the obvious missing
-//! third call and is deliberately absent — see [`feed_draft`].
+//! That is enforced structurally rather than by care: [`finish_draft`] runs
+//! separately, and [`collect_finished_draft`] can send an on-time transcript
+//! only to the event sink. Late results restore engine ownership after Idle
+//! and discard their text. The transcript that is injected and recorded is
+//! still created exclusively by the final engine below.
 //!
 //! [`handle_partial`] is the single place a partial reaches the UI, which is
 //! the seam v0.3 replaces to type into the target application as the user
@@ -112,16 +116,18 @@
 //! transition to transcription.
 
 use std::collections::VecDeque;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::{select, tick, unbounded, Receiver, Sender};
+use crossbeam_channel::{after, select, tick, unbounded, Receiver, Sender};
 
 use utter_audio::{rms_level, AudioError, AudioFrame, CaptureEvent, SilenceDetector};
 use utter_core::{
-    DictationMode, Effect, Event, InjectionMethod, Session, State, TextInjector, TextRefiner, Tone,
-    TranscribeOptions, Transcript,
+    DictationMode, Effect, Event, InjectionMethod, Session, State, SttEngine, SttError,
+    TextInjector, TextRefiner, Tone, TranscribeOptions, Transcript,
 };
 use utter_inject::{BindingId, HotkeyEvent};
 use utter_refine::{apply_rules, match_snippet, ReplaceRule, Snippet};
@@ -133,6 +139,12 @@ use crate::profiles::{ProfileDeps, ProfileRegistry};
 /// channels are handled. A model staying resident for at most another 30
 /// seconds is harmless; waking the tray worker continuously is not.
 const MODEL_EVICTION_POLL_INTERVAL: Duration = Duration::from_secs(30);
+
+/// How much extra time an already-running draft flush may consume after the
+/// authoritative engine has finished. A streaming decoder normally returns
+/// well inside this window; bounding it keeps a broken preview from holding
+/// up injection indefinitely.
+const DRAFT_FINISH_GRACE_PERIOD: Duration = Duration::from_millis(100);
 
 /// Sink the runtime reports dictation phase changes and user-facing notices
 /// to. `state` matches the `DictationPhase` names in [`crate::events`]
@@ -333,6 +345,56 @@ struct PendingUtterance {
     snippet_hit: bool,
 }
 
+type DraftFinishResult = (Box<dyn SttEngine>, Result<Transcript, SttError>);
+
+/// Identity and ownership returned by a background draft flush. `generation`
+/// prevents an engine taken from an old settings registry from being restored
+/// into a replacement registry that happens to reuse the same binding index.
+struct DraftFinishOutcome {
+    id: u64,
+    generation: u64,
+    binding: BindingId,
+    load_epoch: u64,
+    disposition: DraftFinishDisposition,
+    result: DraftFinishResult,
+}
+
+#[derive(Clone)]
+struct DraftFinishTicket {
+    id: u64,
+    generation: u64,
+    load_epoch: u64,
+    disposition: DraftFinishDisposition,
+}
+
+#[derive(Clone)]
+struct DraftFinishDisposition(Arc<AtomicBool>);
+
+impl DraftFinishDisposition {
+    fn new() -> Self {
+        Self(Arc::new(AtomicBool::new(false)))
+    }
+
+    fn mark_timed_out(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    fn timed_out(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
+
+/// Runtime-wide single-worker permit. Dropping it clears the flag during
+/// normal return and panic unwinding alike; no `JoinHandle` or blocking join
+/// is needed to enforce the concurrency limit.
+struct DraftFinishPermit(Arc<AtomicBool>);
+
+impl Drop for DraftFinishPermit {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
 /// Everything the worker thread owns for the lifetime of the runtime:
 /// swappable adapters/config (from the latest [`RuntimeDeps`]) plus
 /// in-flight session state that survives across `select!` iterations.
@@ -382,6 +444,26 @@ struct WorkerCtx {
     /// in order, at the top of the main loop before the next blocking
     /// `select!` — see the module doc comment ("Cancel commit points").
     pending_control: VecDeque<ControlMsg>,
+    /// One native draft `finish()` may run at a time across every profile and
+    /// settings generation. A worker clears this through
+    /// [`DraftFinishPermit`] even if the decoder panics.
+    draft_finish_busy: Arc<AtomicBool>,
+    /// Background workers return engine ownership here. The sender remains
+    /// runtime-wide so timed-out/cancelled results are not lost and can be
+    /// restored later without any thread join.
+    draft_outcome_tx: Sender<DraftFinishOutcome>,
+    draft_outcome_rx: Receiver<DraftFinishOutcome>,
+    /// Incremented on every registry replacement. Outcomes from older
+    /// generations are dropped rather than restored into unrelated profiles.
+    draft_generation: u64,
+    next_draft_finish_id: u64,
+    /// A stuck preview is actionable once, not once per utterance or profile.
+    /// Late recovery deliberately does not reset this runtime-lifetime latch.
+    draft_timeout_notified: bool,
+    /// Outcomes received while a session is active. Healthy engines are
+    /// restored only after the runtime returns to Idle. Their disposition
+    /// decides whether a late error still needs its one user-facing notice.
+    deferred_draft_outcomes: VecDeque<DraftFinishOutcome>,
 }
 
 impl WorkerCtx {
@@ -392,6 +474,7 @@ impl WorkerCtx {
         audio_rx: Receiver<CaptureEvent>,
         control_rx: Receiver<ControlMsg>,
     ) -> Self {
+        let (draft_outcome_tx, draft_outcome_rx) = unbounded();
         Self {
             profiles: deps.profiles,
             active_binding: None,
@@ -416,19 +499,30 @@ impl WorkerCtx {
             pending: None,
             control_rx,
             pending_control: VecDeque::new(),
+            draft_finish_busy: Arc::new(AtomicBool::new(false)),
+            draft_outcome_tx,
+            draft_outcome_rx,
+            draft_generation: 0,
+            next_draft_finish_id: 0,
+            draft_timeout_notified: false,
+            deferred_draft_outcomes: VecDeque::new(),
         }
     }
 
     /// Swaps in newly-reloaded config/adapters. Runtime-owned in-flight
-    /// state (`sink`, the audio channel, `active_capture`, `pending`, ...)
-    /// is left untouched — by the time this runs the session is idle (see
-    /// `reload`), so there is none in flight to preserve or discard.
+    /// state (`sink`, audio and draft-outcome channels, capture, and the
+    /// runtime-wide draft-worker permit) is left untouched — by the time this
+    /// runs the session is idle (see `reload`). The generation advances and
+    /// deferred old-registry outcomes are discarded so a late engine can
+    /// never be restored into a different settings snapshot.
     /// `active_binding` is likewise already `None` by this point (cleared
     /// the moment the session reached `Idle` — see `dispatch`), but is reset
     /// here too as a defensive invariant: nothing after `apply` should ever
     /// resolve a binding against a registry it no longer belongs to.
     fn apply(&mut self, deps: RuntimeDeps) {
         self.profiles = deps.profiles;
+        self.draft_generation = self.draft_generation.wrapping_add(1);
+        self.deferred_draft_outcomes.clear();
         self.active_binding = None;
         self.injector = deps.injector;
         self.automatic_paste_expected = deps.automatic_paste_expected;
@@ -518,6 +612,11 @@ fn worker_loop(deps: RuntimeDeps, sink: Arc<dyn EventSink>, control_rx: Receiver
             recv(ctx.audio_rx) -> msg => {
                 if let Ok(event) = msg {
                     handle_capture_event(&mut session, &mut ctx, event);
+                }
+            },
+            recv(ctx.draft_outcome_rx) -> msg => {
+                if let Ok(outcome) = msg {
+                    handle_late_draft_outcome(session.state(), &mut ctx, outcome);
                 }
             },
             recv(ctx.control_rx) -> msg => match msg {
@@ -699,6 +798,7 @@ fn dispatch(session: &mut Session, ctx: &mut WorkerCtx, event: Event) {
         // No session is in flight anymore; the next one may pick a different profile (see
         // `start_session_for`), so there is no binding to speak of until it does.
         ctx.active_binding = None;
+        restore_deferred_drafts(ctx);
     }
 }
 
@@ -729,9 +829,8 @@ fn start_capture(session: &mut Session, ctx: &mut WorkerCtx) {
     };
     // The draft engine begins on exactly the same options: it is a second
     // view of the same utterance, not a differently-configured one. This is
-    // also the *only* per-utterance reset it gets — `finish()` is never
-    // called on it (see `feed_draft`) — which is sufficient, since `begin`
-    // discards a streaming engine's whole decoding stream.
+    // also resets the streaming engine for this utterance; the matching
+    // `finish_draft` call at a normal stop flushes and closes that stream.
     //
     // It goes *first*, before the final engine, because the final engine's
     // `begin` can fail and returns below without unwinding the session: a
@@ -820,11 +919,6 @@ fn begin_draft(ctx: &mut WorkerCtx, opts: &TranscribeOptions) {
 /// that happens not to have changed this frame" send the HUD to different
 /// places (see [`handle_audio_frame`]).
 ///
-/// `finish()` is never called on the draft engine, here or anywhere else.
-/// That looks like an oversight and is not: nothing consumes a draft
-/// transcript, and never producing one is the *structural* guarantee behind
-/// spec D9 — there is no code path along which draft text could be mistaken
-/// for the transcript that gets injected or recorded.
 fn feed_draft(ctx: &mut WorkerCtx, samples: &[i16]) -> Option<Option<String>> {
     let outcome = active_profile(ctx)
         .draft_engine
@@ -836,6 +930,229 @@ fn feed_draft(ctx: &mut WorkerCtx, samples: &[i16]) -> Option<Option<String>> {
         Some(Err(e)) => {
             disable_draft(ctx, &e.to_string());
             None
+        }
+    }
+}
+
+/// Starts finishing the active draft stream on a dedicated thread after a
+/// normal recording stop. The caller can therefore start the authoritative
+/// engine immediately instead of serialising it behind accessory preview
+/// work.
+///
+/// The atomic permit limits *workers*, not preview engines. If an older
+/// native finish is still alive, this session simply skips its optional
+/// flush and leaves the current profile's engine in place: live feed keeps
+/// working, and its next `begin()` resets the unflushed stream.
+fn finish_draft(ctx: &mut WorkerCtx) -> Option<DraftFinishTicket> {
+    active_profile(ctx).draft_engine.as_ref()?;
+    if ctx
+        .draft_finish_busy
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return None;
+    }
+
+    let binding = ctx
+        .active_binding
+        .expect("draft finish requires the active session binding");
+    let generation = ctx.draft_generation;
+    let load_epoch = ctx
+        .profiles
+        .loaded_epoch(binding)
+        .expect("active draft finish requires resident profile dependencies");
+    let id = ctx.next_draft_finish_id;
+    ctx.next_draft_finish_id = ctx.next_draft_finish_id.wrapping_add(1);
+    let disposition = DraftFinishDisposition::new();
+    let mut draft = active_profile(ctx)
+        .draft_engine
+        .take()
+        .expect("draft slot checked immediately before taking it");
+    let outcome_tx = ctx.draft_outcome_tx.clone();
+    let permit = DraftFinishPermit(ctx.draft_finish_busy.clone());
+    let outcome_disposition = disposition.clone();
+    let worker = thread::Builder::new()
+        .name("utter-draft-finish".to_string())
+        .spawn(move || {
+            let result = catch_unwind(AssertUnwindSafe(|| draft.finish())).unwrap_or_else(|_| {
+                Err(SttError::Engine(
+                    "preview flush worker panicked".to_string(),
+                ))
+            });
+            // Clear concurrency ownership before publishing the outcome. A
+            // new worker may start once this native call is truly over even
+            // if the runtime has not processed the late engine yet.
+            drop(permit);
+            let _ = outcome_tx.send(DraftFinishOutcome {
+                id,
+                generation,
+                binding,
+                load_epoch,
+                disposition: outcome_disposition,
+                result: (draft, result),
+            });
+        });
+
+    match worker {
+        Ok(worker) => {
+            // Detached by design. Ownership returns through `draft_outcome_rx`;
+            // shutdown never joins a possibly stuck native decoder.
+            drop(worker);
+            Some(DraftFinishTicket {
+                id,
+                generation,
+                load_epoch,
+                disposition,
+            })
+        }
+        Err(e) => {
+            // Dropping the failed spawn closure drops `permit` and clears the
+            // atomic flag. The taken engine is gone, so this one real failure
+            // disables only the active profile's preview.
+            disable_draft(ctx, &format!("could not start preview flush: {e}"));
+            None
+        }
+    }
+}
+
+/// Restores a late healthy engine only when it still belongs to this registry
+/// generation. Its transcript missed the HUD window and is discarded. A late
+/// failure after cancellation is still a real model failure and is reported;
+/// after a timeout it stays silent because that timeout was already reported.
+fn restore_late_draft_outcome(ctx: &mut WorkerCtx, outcome: DraftFinishOutcome) {
+    if outcome.generation != ctx.draft_generation
+        || ctx.profiles.loaded_epoch(outcome.binding) != Some(outcome.load_epoch)
+    {
+        return;
+    }
+    let timed_out = outcome.disposition.timed_out();
+    let (draft, result) = outcome.result;
+    match result {
+        Ok(_) => {
+            let _ =
+                ctx.profiles
+                    .restore_draft_if_loaded(outcome.binding, outcome.load_epoch, draft);
+        }
+        Err(e) if !timed_out => {
+            notify_draft_unavailable(ctx, &e.to_string());
+        }
+        Err(_) => {
+            // The bounded collector already emitted the runtime's one timeout
+            // notice. Do not turn the eventual native error into a duplicate.
+        }
+    }
+}
+
+fn handle_late_draft_outcome(state: State, ctx: &mut WorkerCtx, outcome: DraftFinishOutcome) {
+    if outcome.generation != ctx.draft_generation {
+        return;
+    }
+    if state == State::Idle {
+        restore_late_draft_outcome(ctx, outcome);
+    } else {
+        ctx.deferred_draft_outcomes.push_back(outcome);
+    }
+}
+
+/// Pulls all outcomes already queued at an Idle boundary, then restores the
+/// healthy engines deferred during Transcribing/Refining/Injecting. This is
+/// also the cancellation path's recovery point; no HUD output is possible
+/// here.
+fn restore_deferred_drafts(ctx: &mut WorkerCtx) {
+    while let Ok(outcome) = ctx.draft_outcome_rx.try_recv() {
+        if outcome.generation == ctx.draft_generation {
+            ctx.deferred_draft_outcomes.push_back(outcome);
+        }
+    }
+    while let Some(outcome) = ctx.deferred_draft_outcomes.pop_front() {
+        restore_late_draft_outcome(ctx, outcome);
+    }
+}
+
+/// Applies the current session's on-time outcome. This is the only place a
+/// flushed draft transcript may reach the HUD.
+fn apply_current_draft_outcome(ctx: &mut WorkerCtx, outcome: DraftFinishOutcome) {
+    if outcome.generation != ctx.draft_generation
+        || ctx.profiles.loaded_epoch(outcome.binding) != Some(outcome.load_epoch)
+    {
+        return;
+    }
+    let (draft, result) = outcome.result;
+    match result {
+        Ok(transcript) => {
+            let restored =
+                ctx.profiles
+                    .restore_draft_if_loaded(outcome.binding, outcome.load_epoch, draft);
+            let text = transcript.text.trim();
+            if restored && !text.is_empty() {
+                handle_partial(ctx.sink.as_ref(), "transcribing", 0.0, Some(text));
+            }
+        }
+        Err(e) => notify_draft_unavailable(ctx, &e.to_string()),
+    }
+}
+
+/// Waits up to the short grace period for draft output while also watching
+/// the control channel. Returns `true` when cancellation won. A pending or
+/// even already-ready outcome remains on/deferred from the global channel and
+/// is restored silently after Idle; cancellation never waits and never emits
+/// preview text.
+fn collect_finished_draft(ctx: &mut WorkerCtx, ticket: Option<DraftFinishTicket>) -> bool {
+    let Some(ticket) = ticket else {
+        return false;
+    };
+    let deadline = Instant::now() + DRAFT_FINISH_GRACE_PERIOD;
+
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            if check_for_cancel(ctx) {
+                return true;
+            }
+            ticket.disposition.mark_timed_out();
+            notify_draft_timeout_once(ctx);
+            return false;
+        }
+        let timeout = after(remaining);
+
+        select! {
+            recv(ctx.draft_outcome_rx) -> result => {
+                if let Ok(outcome) = result {
+                    if outcome.id != ticket.id
+                        || outcome.generation != ticket.generation
+                        || outcome.load_epoch != ticket.load_epoch
+                    {
+                        handle_late_draft_outcome(State::Transcribing, ctx, outcome);
+                        continue;
+                    }
+                    if check_for_cancel(ctx) {
+                        ctx.deferred_draft_outcomes.push_back(outcome);
+                        return true;
+                    }
+                    apply_current_draft_outcome(ctx, outcome);
+                    return false;
+                }
+            },
+            recv(ctx.control_rx) -> msg => match msg {
+                Ok(ControlMsg::Cancel) => {
+                    // The cancellation itself was consumed by this select;
+                    // drain any siblings so non-cancel controls retain order.
+                    let _ = check_for_cancel(ctx);
+                    return true;
+                }
+                Ok(other) => ctx.pending_control.push_back(other),
+                Err(_) => {
+                    return true;
+                }
+            },
+            recv(timeout) -> _ => {
+                if check_for_cancel(ctx) {
+                    return true;
+                }
+                ticket.disposition.mark_timed_out();
+                notify_draft_timeout_once(ctx);
+                return false;
+            }
         }
     }
 }
@@ -861,11 +1178,29 @@ fn feed_draft(ctx: &mut WorkerCtx, samples: &[i16]) -> Option<Option<String>> {
 /// happened on is an implementation detail they have no way to act on.
 fn disable_draft(ctx: &mut WorkerCtx, reason: &str) {
     active_profile(ctx).draft_engine = None;
+    notify_draft_unavailable(ctx, reason);
+}
+
+fn notify_draft_unavailable(ctx: &WorkerCtx, reason: &str) {
     ctx.sink.notify(
         "info",
         &format!(
             "live preview unavailable: {reason}. Dictation is unaffected — only the live \
              preview is off."
+        ),
+    );
+}
+
+fn notify_draft_timeout_once(ctx: &mut WorkerCtx) {
+    if ctx.draft_timeout_notified {
+        return;
+    }
+    ctx.draft_timeout_notified = true;
+    notify_draft_unavailable(
+        ctx,
+        &format!(
+            "preview flush exceeded {} ms",
+            DRAFT_FINISH_GRACE_PERIOD.as_millis()
         ),
     );
 }
@@ -876,8 +1211,8 @@ fn disable_draft(ctx: &mut WorkerCtx, reason: &str) {
 ///
 /// [`dispatch`]'s own `emit_state` is not a second such place: it reports a
 /// phase change and passes no partial at all, by construction.
-fn handle_partial(sink: &dyn EventSink, level: f32, partial: Option<&str>) {
-    sink.emit_state("recording", level, partial);
+fn handle_partial(sink: &dyn EventSink, state: &str, level: f32, partial: Option<&str>) {
+    sink.emit_state(state, level, partial);
 }
 
 fn handle_audio_frame(session: &mut Session, ctx: &mut WorkerCtx, frame: AudioFrame) {
@@ -906,7 +1241,7 @@ fn handle_audio_frame(session: &mut Session, ctx: &mut WorkerCtx, frame: AudioFr
     // it did before (which, for every offline engine in the catalog, means
     // no preview at all).
     let partial = feed_draft(ctx, &frame.samples).unwrap_or(final_partial);
-    handle_partial(ctx.sink.as_ref(), level, partial.as_deref());
+    handle_partial(ctx.sink.as_ref(), "recording", level, partial.as_deref());
 
     let silence_fired = ctx
         .silence_detector
@@ -967,23 +1302,30 @@ fn stop_capture_and_maybe_transcribe(session: &mut Session, ctx: &mut WorkerCtx)
         // Deliberately *not* fanned out to the draft engine: the fan-out
         // ends when recording does (see the module doc comment). This loop
         // runs while the session is already `Transcribing` — the moment the
-        // user is waiting for their text — and a draft decode here would buy
-        // nothing at all, since `finish()` is never called on the draft
-        // engine and so nothing would ever read the result. It is not a free
-        // nothing either: the draft engine is deliberately given a single
-        // inference thread to stay out of the final engine's way, and
-        // spending it after the release inverts that (design spec §5, and
-        // the thread-count measurements behind it).
+        // user is waiting for their text — so re-decoding capture-queue
+        // leftovers in the accessory model would delay the authoritative
+        // result. `finish_draft` below still lets the streaming decoder add
+        // and consume its own required trailing context.
     }
 
+    let draft_finish = finish_draft(ctx);
     let result = active_profile(ctx).engine.finish();
 
     // Commit point 1/2 (see the module doc comment): a `Cancel` that arrived
-    // any time up to and including while `finish()` was blocking must win
-    // over the transcript it produced — feed `CancelRequested` instead and
-    // never dispatch the pending result at all, regardless of whether it
-    // was a success or a failure.
+    // while the authoritative `finish()` was blocking must win immediately,
+    // before the optional 100 ms draft grace and before flushed preview text
+    // can reach the HUD. The ticket is simply abandoned; the runtime-wide
+    // outcome channel restores a healthy engine after Idle without showing
+    // its text, and cancellation never waits for accessory work.
     if check_for_cancel(ctx) {
+        dispatch(session, ctx, Event::CancelRequested);
+        return;
+    }
+
+    // A cancel arriving during the bounded collection window wins too. The
+    // collector watches `control_rx`, suppresses draft output, and returns
+    // without waiting for a native draft call that is still in flight.
+    if collect_finished_draft(ctx, draft_finish) {
         dispatch(session, ctx, Event::CancelRequested);
         return;
     }

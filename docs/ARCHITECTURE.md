@@ -117,16 +117,23 @@ partial and has no state for one.
    `Recording` is fed to the active profile's `SttEngine`, which buffers it
    until `finish()`. If the profile also has a draft engine, the same frame
    goes to that too, in the same function, and the partial it decodes on the
-   spot is what the HUD previews. The draft engine gets exactly one
-   onnxruntime inference thread rather than the half-the-cores share the
+   spot is what the HUD previews. The draft engine gets a small fixed
+   onnxruntime inference budget rather than the half-the-cores share the
    final engine takes: the two decode concurrently on the same machine, and
    the preview is a courtesy the injected text must not pay for. The fan-out
-   lives at exactly one call site and ends when recording does — see "The
-   draft engine never touches the result" below.
-4. **Finish** — releasing the hotkey (or a silence timeout) stops capture,
-   drains the frames still in flight into the final engine alone, and calls
-   `engine.finish()`, producing a `Transcript`. The draft engine's `finish()`
-   is never called.
+   lives in the runtime and the draft result is confined to the HUD — see
+   "The draft transcript has one HUD-only sink" below.
+4. **Finish** — releasing the hotkey (or a silence timeout) stops capture and
+   drains the frames still in flight into the final engine alone. The runtime
+   moves the draft engine to a dedicated thread so models such as T-One can
+   flush trailing context, then starts the final engine immediately. Once the
+   final result is ready, draft collection gets at most 100 ms: on-time
+   success emits one last HUD preview and restores the reusable engine. A
+   timeout reports only a preview problem; a later healthy result restores
+   the engine silently after Idle. Cancellation skips the grace period,
+   suppresses flushed text as well as the final result, and likewise restores
+   a healthy engine when it returns. The final engine remains the only source
+   of the authoritative `Transcript` used below.
 5. **Rules and snippets** — the runtime applies dictionary replacement rules
    to the raw transcript, then checks it against configured snippets. A
    snippet match replaces the text outright and skips the refiner
@@ -214,20 +221,24 @@ partial and has no state for one.
   runtime holds a profile's draft engine in the same `Box<dyn SttEngine>` as
   its final one, and the fan-out in the worker is two calls on the same
   trait rather than a second abstraction.
-- **The draft engine never touches the result, and that is structural** —
+- **The draft transcript has one HUD-only sink** —
   the live preview's text must never reach the injected transcript or the
-  history. That guarantee is not maintained by care or asserted by a test;
-  it holds because no draft transcript is ever produced. `begin()` and
-  `feed()` are the only calls made on a draft engine anywhere in the
-  codebase — `finish()`, the one call that would return a `Transcript`, is
-  deliberately absent — so there is nothing on any path that could be
-  mistaken for the real one. `feed_draft`'s return value is consumed one
-  line later by `handle_partial`, the single function that talks to the HUD.
-  A test can only show that the leak did not happen in the cases it
-  enumerates; not producing the value at all means there is no case to
-  enumerate. The same shape decides the trailing frames drained after the
-  hotkey is released: they go to the final engine only, because the user is
-  already waiting on that decode and nothing would ever read a draft one.
+  history. Live partials go directly from `feed_draft` to `handle_partial`.
+  At a normal stop, `finish_draft` moves the draft engine to an isolated
+  worker. `collect_finished_draft` watches its runtime-wide outcome channel
+  for no more than 100 ms after final decoding, emits on-time successful text
+  only as a `transcribing` HUD event, and restores the engine for reuse.
+  Late healthy outcomes discard their text and restore ownership only after
+  Idle; a generation marker prevents restoration across settings reloads.
+  Neither path can construct `Event::TranscriptReady` or
+  `PendingUtterance`; those remain exclusive to the separately finished final
+  engine. Focused runtime tests use unmistakably different draft and final
+  strings and assert both the flushed HUD preview and the injected and stored
+  authoritative text. Native decoder calls cannot be cancelled, so an atomic
+  runtime-wide permit allows at most one live flush worker. Other profiles
+  keep their preview engines and live partials but temporarily skip their own
+  final flush. Trailing capture-queue frames still go to the final engine
+  alone so accessory decoding does not delay the result.
 - **A model's kind is checked against the catalog before its files are
   opened** — sherpa-onnx's C++ layer calls `_Exit()` when handed a model it
   cannot read: it does not return an error, it takes the whole process down,
