@@ -5,13 +5,36 @@
 // one of `ctrl`/`alt`/`shift`/`super` (the modifier names, canonicalized —
 // the Rust parser also accepts `control` and `meta`/`win` as aliases for
 // `ctrl`/`super`, but this picker only ever emits the canonical short forms)
-// or a single letter/digit/`f1`..`f24`/`space` base key. A chord made
+// or a single letter/digit/`f1`..`f24`/`space`/`backquote`/`insert` base
+// key. A chord made
 // entirely of modifiers (e.g. the default `ctrl+super`) is valid on Linux,
 // while callers can require a base key on platforms whose global-shortcut
 // API cannot register modifier-only chords.
 
 export const MODIFIER_ORDER = ['ctrl', 'alt', 'shift', 'super'] as const
 export type ModifierToken = (typeof MODIFIER_ORDER)[number]
+
+export interface ModifierFlags {
+  ctrlKey: boolean
+  altKey: boolean
+  shiftKey: boolean
+  metaKey: boolean
+}
+
+/** Reads modifier state from the flags carried by every keyboard event.
+ *
+ * This is deliberately used in addition to the modifier keys' own keydown
+ * events. WKWebView may omit an individual modifier keydown while still
+ * setting the corresponding flag on the base-key event, especially for
+ * Command-based shortcuts. */
+export function modifierTokensFor(flags: ModifierFlags): ModifierToken[] {
+  const tokens: ModifierToken[] = []
+  if (flags.ctrlKey) tokens.push('ctrl')
+  if (flags.altKey) tokens.push('alt')
+  if (flags.shiftKey) tokens.push('shift')
+  if (flags.metaKey) tokens.push('super')
+  return tokens
+}
 
 const MODIFIER_KEY_NAMES: Record<string, ModifierToken> = {
   Control: 'ctrl',
@@ -43,7 +66,8 @@ const SUPER_CODES = new Set(['MetaLeft', 'MetaRight', 'OSLeft', 'OSRight'])
  * `code` (the physical key — layout- and modifier-independent) and `key`
  * (the character the layout actually produced).
  *
- * Letters and digits are read from `code` (`KeyA`..`KeyZ`, `Digit0`..`Digit9`)
+ * Letters, digits, Backquote and Insert are read from `code` (`KeyA`..`KeyZ`,
+ * `Digit0`..`Digit9`, `Backquote`, `Insert`)
  * rather than `key`: holding Shift changes `key` (e.g. `Shift+1` on a US
  * layout reports `key === '!'`, which a naive `/^[a-zA-Z0-9]$/` test on `key`
  * would reject entirely, silently dropping the base key from the captured
@@ -59,6 +83,16 @@ export function tokenFor(code: string, key: string): string | null {
   // kept as a fallback for the same synthetic-event case the letter/digit
   // fallback below handles (code missing/non-standard).
   if (code === 'Space' || key === ' ') return 'space'
+
+  // Use the physical code for the key immediately left of 1. Its character
+  // depends on the active layout and modifiers (backquote/tilde/ё/Ё), but the
+  // persisted shortcut must keep identifying the same physical key.
+  if (code === 'Backquote') return 'backquote'
+
+  // `Insert` is present on external PC-style keyboards. Some keyboards put
+  // a microphone glyph on the same key; whether it reaches us as Insert or
+  // as a system-handled dictation key is determined by the keyboard firmware.
+  if (code === 'Insert' || key === 'Insert') return 'insert'
 
   const letterMatch = /^Key([A-Z])$/.exec(code)
   if (letterMatch) return letterMatch[1].toLowerCase()

@@ -120,6 +120,8 @@ fn resolve_alternatives(token: Key) -> Vec<KeyCode> {
             .into_iter()
             .collect(),
         Key::Space => vec![KeyCode::KEY_SPACE],
+        Key::Backquote => vec![KeyCode::KEY_GRAVE],
+        Key::Insert => vec![KeyCode::KEY_INSERT],
     };
 
     if codes.is_empty() {
@@ -268,6 +270,17 @@ mod tests {
         let spec = parse_hotkey("ctrl+space").unwrap();
         let codes = resolve_key_codes(std::slice::from_ref(&spec));
         assert_eq!(codes.get(&KeyCode::KEY_SPACE), Some(&Key::Space));
+    }
+
+    #[test]
+    fn resolves_backquote_and_insert_base_keys() {
+        let specs = [
+            parse_hotkey("backquote").unwrap(),
+            parse_hotkey("insert").unwrap(),
+        ];
+        let codes = resolve_key_codes(&specs);
+        assert_eq!(codes.get(&KeyCode::KEY_GRAVE), Some(&Key::Backquote));
+        assert_eq!(codes.get(&KeyCode::KEY_INSERT), Some(&Key::Insert));
     }
 
     #[test]

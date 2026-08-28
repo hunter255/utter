@@ -5,6 +5,7 @@ import {
   formatCombo,
   hasBaseKey,
   isModifierToken,
+  modifierTokensFor,
   parseChordTokens,
   tokenFor,
 } from '../hotkey'
@@ -62,10 +63,42 @@ describe('tokenFor', () => {
     expect(tokenFor('', ' ')).toBe('space')
   })
 
+  it('recognizes the physical key left of 1 across layouts and Shift state', () => {
+    expect(tokenFor('Backquote', '`')).toBe('backquote')
+    expect(tokenFor('Backquote', '~')).toBe('backquote')
+    expect(tokenFor('Backquote', 'ё')).toBe('backquote')
+    expect(tokenFor('Backquote', 'Ё')).toBe('backquote')
+  })
+
+  it('recognizes Insert from either the physical code or key name', () => {
+    expect(tokenFor('Insert', 'Insert')).toBe('insert')
+    expect(tokenFor('', 'Insert')).toBe('insert')
+  })
+
   it('rejects keys outside the accepted grammar', () => {
     expect(tokenFor('Escape', 'Escape')).toBeNull()
     expect(tokenFor('Tab', 'Tab')).toBeNull()
     expect(tokenFor('', '!')).toBeNull()
+  })
+})
+
+describe('modifierTokensFor', () => {
+  it('recovers a complete macOS modifier chord from base-key event flags', () => {
+    expect(
+      modifierTokensFor({ ctrlKey: true, altKey: true, shiftKey: false, metaKey: true }),
+    ).toEqual(['ctrl', 'alt', 'super'])
+  })
+
+  it('returns modifiers in canonical chord order', () => {
+    expect(
+      modifierTokensFor({ ctrlKey: true, altKey: true, shiftKey: true, metaKey: true }),
+    ).toEqual(['ctrl', 'alt', 'shift', 'super'])
+  })
+
+  it('returns no tokens when the event carries no modifiers', () => {
+    expect(
+      modifierTokensFor({ ctrlKey: false, altKey: false, shiftKey: false, metaKey: false }),
+    ).toEqual([])
   })
 })
 
@@ -109,6 +142,8 @@ describe('hasBaseKey', () => {
 
   it('accepts a chord with one non-modifier key', () => {
     expect(hasBaseKey('ctrl+alt+space')).toBe(true)
+    expect(hasBaseKey('backquote')).toBe(true)
+    expect(hasBaseKey('ctrl+insert')).toBe(true)
   })
 })
 

@@ -4,7 +4,13 @@
   // there, including the shift+digit case); this component only owns the
   // capture gesture (which keys are currently down, when to finalize).
 
-  import { formatCombo, hasBaseKey, isModifierToken, tokenFor } from '../hotkey'
+  import {
+    formatCombo,
+    hasBaseKey,
+    isModifierToken,
+    modifierTokensFor,
+    tokenFor,
+  } from '../hotkey'
 
   interface Props {
     value?: string
@@ -18,6 +24,7 @@
   let capturing = $state(false)
   let preview = $state('')
   let hint = $state('')
+  let button: HTMLButtonElement
 
   /** Keys physically down right now, for detecting "every key released". */
   let down = new Set<string>()
@@ -41,7 +48,7 @@
       if (requireBaseKey && !hasBaseKey(candidate)) {
         capturing = false
         preview = ''
-        hint = 'Add a letter, number, function key, or Space'
+        hint = 'Add a letter, number, function key, Space, `, or Insert'
         down = new Set()
         combo = new Set()
         return
@@ -67,6 +74,11 @@
     const token = tokenFor(event.code, event.key)
     if (!token) return
 
+    // WKWebView can omit a standalone modifier keydown while still reporting
+    // the modifier on the base-key event. Recover it from the event flags so
+    // Command/Option combinations are not silently flattened to one key.
+    for (const modifier of modifierTokensFor(event)) combo.add(modifier)
+
     const comboHasBaseKey = [...combo].some((t) => !isModifierToken(t))
     if (!isModifierToken(token) && comboHasBaseKey && !combo.has(token)) {
       hint = 'A hotkey may only have one base key'
@@ -86,28 +98,50 @@
     const token = tokenFor(event.code, event.key)
     if (token) down.delete(token)
 
-    if (down.size === 0) {
+    // macOS requires a base key. Commit as soon as that key is released: the
+    // WebView does not reliably deliver a later keyup for Command/Option.
+    const releasedCapturedBase =
+      requireBaseKey && token !== null && !isModifierToken(token) && combo.has(token)
+    if (releasedCapturedBase || down.size === 0) {
       stop(true)
     }
   }
 
   function onBlur() {
-    // Losing focus mid-capture (e.g. Alt-Tab) must not leave the picker
-    // stuck listening forever.
+    // Losing the app window mid-capture (e.g. Command-Tab) must not leave the
+    // picker stuck listening forever.
     if (capturing) stop(false)
   }
+
+  function onPointerDown(event: PointerEvent) {
+    // WKWebView may focus the enclosing HTML document rather than this button,
+    // so a button `blur` is not a reliable signal that the user clicked away.
+    if (capturing && event.target instanceof Node && !button.contains(event.target)) {
+      stop(false)
+    }
+  }
 </script>
+
+<!-- A window listener keeps capture alive when WKWebView moves DOM focus away
+     from the button while a macOS modifier chord is held. The handlers are
+     inert outside the short capture gesture. -->
+<svelte:window
+  onkeydown={onKeydown}
+  onkeyup={onKeyup}
+  onblur={onBlur}
+  onpointerdown={onPointerDown}
+/>
 
 <div class="hotkey-picker">
   <button
     type="button"
+    bind:this={button}
     {id}
     {disabled}
     class="capture-button"
     class:capturing
+    aria-pressed={capturing}
     onclick={start}
-    onkeydown={onKeydown}
-    onkeyup={onKeyup}
     onblur={onBlur}
   >
     {#if capturing}

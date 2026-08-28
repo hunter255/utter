@@ -348,7 +348,7 @@
       {#if !hotkeyValid}
         <p class="warn">
           {requiresBaseKey
-            ? 'macOS needs at least one regular key. Try ctrl+alt+space.'
+            ? 'macOS needs a base key; modifiers are optional. Try `, Insert, F5, or ctrl+alt+space.'
             : 'Choose a hotkey before continuing.'}
         </p>
       {/if}

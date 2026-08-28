@@ -123,6 +123,8 @@ fn to_global_hotkey(spec: &HotkeySpec) -> anyhow::Result<HotKey> {
             Key::Char(c) => key = Some(code_for(&format!("Key{}", c.to_ascii_uppercase()))?),
             Key::Function(n) => key = Some(code_for(&format!("F{n}"))?),
             Key::Space => key = Some(code_for("Space")?),
+            Key::Backquote => key = Some(code_for("Backquote")?),
+            Key::Insert => key = Some(code_for("Insert")?),
         }
     }
 
@@ -175,5 +177,14 @@ mod tests {
         let hotkey = to_global_hotkey(&spec).expect("should convert");
         assert_eq!(hotkey.key, Code::Space);
         assert!(hotkey.mods.contains(Modifiers::CONTROL));
+    }
+
+    #[test]
+    fn converts_backquote_and_insert_base_keys() {
+        let spec = parse_hotkey("backquote").unwrap();
+        assert_eq!(to_global_hotkey(&spec).unwrap().key, Code::Backquote);
+
+        let spec = parse_hotkey("insert").unwrap();
+        assert_eq!(to_global_hotkey(&spec).unwrap().key, Code::Insert);
     }
 }

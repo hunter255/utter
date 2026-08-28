@@ -199,7 +199,7 @@
       label="Hotkey"
       for="profile-{index}-hotkey"
       hint={requiresBaseKey
-        ? 'macOS requires modifiers plus one regular key, e.g. ctrl+alt+space.'
+        ? 'macOS requires one base key; modifiers are optional, e.g. `, Insert, F5, or ctrl+alt+space.'
         : 'Modifiers plus one key, e.g. ctrl+alt+d, or modifiers alone.'}
     >
       <HotkeyPicker
@@ -213,7 +213,7 @@
       {#if invalidHotkeys[index]}
         <p class="warning">
           {requiresBaseKey
-            ? 'This hotkey cannot be registered on macOS; add a letter, number, function key, or Space.'
+            ? 'This hotkey cannot be registered on macOS; add a letter, number, function key, Space, `, or Insert.'
             : 'Choose a valid hotkey for this profile.'}
         </p>
       {/if}
