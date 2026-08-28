@@ -68,7 +68,8 @@
   let models = $state<ModelInfo[]>([])
   let modelsError = $state('')
   let progress = $state<Record<string, { done: number; total: number }>>({})
-  let busy = $state<Record<string, boolean>>({})
+  let activeDownloadId = $state<string | null>(null)
+  let cancellingDownload = $state(false)
   let unlistenProgress: (() => void) | undefined
 
   // A fresh profile starts on sherpa, but onboarding is where users should be able to choose
@@ -141,18 +142,32 @@
   }
 
   async function install(id: string) {
-    busy = { ...busy, [id]: true }
+    if (activeDownloadId) return
+    activeDownloadId = id
     modelsError = ''
     try {
-      await api.downloadModel(id)
-      await refreshModels()
+      const outcome = await api.downloadModel(id)
+      if (outcome === 'installed') await refreshModels()
     } catch (err) {
       modelsError = `Failed to download "${id}": ${String(err)}`
     } finally {
-      busy = { ...busy, [id]: false }
+      activeDownloadId = null
+      cancellingDownload = false
       const rest = { ...progress }
       delete rest[id]
       progress = rest
+    }
+  }
+
+  async function cancelDownload(id: string) {
+    if (activeDownloadId !== id || cancellingDownload) return
+    cancellingDownload = true
+    modelsError = ''
+    try {
+      await api.cancelModelDownload(id)
+    } catch (err) {
+      cancellingDownload = false
+      modelsError = `Failed to cancel "${id}": ${String(err)}`
     }
   }
 
@@ -316,7 +331,7 @@
         <Select
           id="onboarding-model"
           options={modelPickerOptions}
-          disabled={models.length === 0}
+          disabled={models.length === 0 || activeDownloadId !== null}
           bind:value={
             () => (profileEngine === 'cloud' ? '' : (profileModelId ?? '')),
             selectModel
@@ -347,17 +362,22 @@
               </div>
               {#if selectedModel.installed}
                 <span class="badge">Installed</span>
+              {:else if activeDownloadId === selectedModel.id}
+                <button
+                  type="button"
+                  class="cancel"
+                  onclick={() => cancelDownload(selectedModel.id)}
+                  disabled={cancellingDownload}
+                >{cancellingDownload ? 'Cancelling…' : 'Cancel'}</button>
               {:else}
                 <button
                   type="button"
                   onclick={() => install(selectedModel.id)}
-                  disabled={busy[selectedModel.id]}
-                >
-                  {busy[selectedModel.id] ? 'Downloading…' : 'Install'}
-                </button>
+                  disabled={activeDownloadId !== null}
+                >Install</button>
               {/if}
             </div>
-            {#if busy[selectedModel.id]}
+            {#if activeDownloadId === selectedModel.id}
               <div class="progress-track">
                 <div
                   class="progress-fill"
@@ -499,12 +519,17 @@
 
     <div class="actions">
       {#if step > 0}
-        <button type="button" onclick={back}>Back</button>
+        <button type="button" onclick={back} disabled={activeDownloadId !== null}>Back</button>
       {/if}
       <div class="spacer"></div>
       {#if step < STEPS.length - 1}
-        <button type="button" class="ghost" onclick={onDone}>Skip setup</button>
-        <button type="button" class="primary" onclick={next} disabled={step === 3 && !hotkeyValid}>
+        <button type="button" class="ghost" onclick={onDone} disabled={activeDownloadId !== null}>Skip setup</button>
+        <button
+          type="button"
+          class="primary"
+          onclick={next}
+          disabled={activeDownloadId !== null || (step === 3 && !hotkeyValid)}
+        >
           Continue
         </button>
       {:else}
@@ -722,6 +747,10 @@
   button:disabled {
     opacity: 0.55;
     cursor: not-allowed;
+  }
+
+  button.cancel {
+    color: var(--danger);
   }
 
   button.primary {

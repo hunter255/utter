@@ -21,6 +21,7 @@ import type {
   ApiKeyService,
   DictationStatePayload,
   HistoryEntry,
+  ModelDownloadOutcome,
   ModelInfo,
   ModelProgressPayload,
   NoticePayload,
@@ -46,8 +47,12 @@ export function listModels(): Promise<ModelInfo[]> {
   return invoke('list_models')
 }
 
-export function downloadModel(id: string): Promise<void> {
+export function downloadModel(id: string): Promise<ModelDownloadOutcome> {
   return invoke('download_model', { id })
+}
+
+export function cancelModelDownload(id: string): Promise<void> {
+  return invoke('cancel_model_download', { id })
 }
 
 export function removeModel(id: string): Promise<void> {

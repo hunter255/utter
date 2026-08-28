@@ -16,12 +16,44 @@
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::error::IntegrityError;
+
+/// Cooperative cancellation shared between the desktop owner and the
+/// blocking downloader. The store crate knows nothing about Tauri; it only
+/// observes this one-way flag at safe boundaries.
+#[derive(Debug, Clone, Default)]
+pub struct DownloadCancellation(Arc<AtomicBool>);
+
+impl DownloadCancellation {
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+
+    fn check(&self) -> Result<()> {
+        if self.is_cancelled() {
+            Err(DownloadCancelled.into())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// Typed normal outcome used to distinguish a user's cancellation from a
+/// network, disk, or integrity failure carried by `anyhow::Error`.
+#[derive(Debug, thiserror::Error)]
+#[error("model download cancelled")]
+pub struct DownloadCancelled;
 
 /// Where a model's output is used in the dictation pipeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -497,15 +529,28 @@ impl ModelManager {
     /// sherpa-onnx entry) has its whole staging directory renamed into place
     /// at once.
     pub fn download(&self, id: &str, progress: &mut dyn FnMut(u64, u64)) -> Result<PathBuf> {
+        self.download_with_cancellation(id, &DownloadCancellation::default(), progress)
+    }
+
+    /// [`Self::download`] with cooperative cancellation. Cancellation is
+    /// checked before network access, around every response-body read,
+    /// between artifacts, and immediately before the atomic install rename.
+    pub fn download_with_cancellation(
+        &self,
+        id: &str,
+        cancellation: &DownloadCancellation,
+        progress: &mut dyn FnMut(u64, u64),
+    ) -> Result<PathBuf> {
         let entry = *self
             .find(id)
             .ok_or_else(|| anyhow!("unknown model id: {id}"))?;
+        cancellation.check()?;
 
         let models_dir = self.models_dir();
         fs::create_dir_all(&models_dir)
             .with_context(|| format!("failed to create {}", models_dir.display()))?;
 
-        self.download_artifacts(id, &entry, &models_dir, progress)
+        self.download_artifacts(id, &entry, &models_dir, cancellation, progress)
     }
 
     /// Downloads and verifies every artifact of `entry` into a staging
@@ -518,12 +563,14 @@ impl ModelManager {
         id: &str,
         entry: &CatalogEntry,
         models_dir: &Path,
+        cancellation: &DownloadCancellation,
         progress: &mut dyn FnMut(u64, u64),
     ) -> Result<PathBuf> {
         let Some((first, _)) = entry.artifacts.split_first() else {
             bail!("model '{id}' has no artifacts defined");
         };
 
+        cancellation.check()?;
         let staging_dir = models_dir.join(format!("{}.staging", entry.id));
         let _ = fs::remove_dir_all(&staging_dir);
         fs::create_dir_all(&staging_dir)
@@ -539,12 +586,30 @@ impl ModelManager {
         let grand_total: u64 = entry.artifacts.iter().map(|a| a.size_bytes).sum();
         let mut completed: u64 = 0;
         for artifact in entry.artifacts {
+            if let Err(error) = cancellation.check() {
+                let _ = fs::remove_dir_all(&staging_dir);
+                return Err(error);
+            }
             let mut aggregate = |done: u64, _total: u64| progress(completed + done, grand_total);
-            if let Err(err) = stage_one_artifact(id, artifact, &staging_dir, &mut aggregate) {
+            if let Err(err) =
+                stage_one_artifact(id, artifact, &staging_dir, cancellation, &mut aggregate)
+            {
                 let _ = fs::remove_dir_all(&staging_dir);
                 return Err(err);
             }
             completed += artifact.size_bytes;
+            // One explicit boundary callback lets an owner cancel after a
+            // verified artifact and before the next request. Skip the final
+            // boundary because the stream already reported completion and a
+            // duplicate 100% event would add no information.
+            if completed < grand_total {
+                progress(completed, grand_total);
+            }
+        }
+
+        if let Err(error) = cancellation.check() {
+            let _ = fs::remove_dir_all(&staging_dir);
+            return Err(error);
         }
 
         let final_path = self.install_path(entry);
@@ -705,10 +770,12 @@ fn stage_one_artifact(
     id: &str,
     artifact: &Artifact,
     staging_dir: &Path,
+    cancellation: &DownloadCancellation,
     progress: &mut dyn FnMut(u64, u64),
 ) -> Result<()> {
     let part_path = staging_dir.join(format!("{}.part", artifact.name));
-    let digest = stream_to_part(artifact.url, &part_path, progress)?;
+    let digest =
+        stream_to_part_with_cancellation(artifact.url, &part_path, cancellation, progress)?;
     if digest != artifact.sha256 {
         bail!(
             "checksum mismatch for model '{id}' artifact '{}': expected {}, got {digest}",
@@ -730,13 +797,25 @@ fn stage_one_artifact(
 /// Streams the HTTP body at `url` into `part_path`, reporting `(done,
 /// total)` progress as chunks arrive, and returns the hex-encoded sha256 of
 /// the bytes received.
+#[cfg(test)]
 fn stream_to_part(
     url: &str,
     part_path: &Path,
     progress: &mut dyn FnMut(u64, u64),
 ) -> Result<String> {
+    stream_to_part_with_cancellation(url, part_path, &DownloadCancellation::default(), progress)
+}
+
+fn stream_to_part_with_cancellation(
+    url: &str,
+    part_path: &Path,
+    cancellation: &DownloadCancellation,
+    progress: &mut dyn FnMut(u64, u64),
+) -> Result<String> {
+    cancellation.check()?;
     let mut response =
         reqwest::blocking::get(url).with_context(|| format!("failed to request {url}"))?;
+    cancellation.check()?;
     if !response.status().is_success() {
         bail!("download of {url} failed with status {}", response.status());
     }
@@ -750,9 +829,11 @@ fn stream_to_part(
 
     progress(0, total);
     loop {
+        cancellation.check()?;
         let n = response
             .read(&mut buf)
             .context("failed reading response body")?;
+        cancellation.check()?;
         if n == 0 {
             break;
         }
@@ -762,6 +843,7 @@ fn stream_to_part(
         done += n as u64;
         progress(done, total);
     }
+    cancellation.check()?;
     file.sync_all()
         .with_context(|| format!("failed to flush {}", part_path.display()))?;
 
@@ -873,6 +955,136 @@ mod tests {
         let mut hasher = Sha256::new();
         hasher.update(bytes);
         hex::encode(hasher.finalize())
+    }
+
+    fn assert_cancelled(result: &Result<PathBuf>) {
+        let error = result.as_ref().expect_err("download should be cancelled");
+        assert!(
+            error.downcast_ref::<DownloadCancelled>().is_some(),
+            "cancellation must remain distinguishable from failure, got: {error:#}"
+        );
+    }
+
+    #[test]
+    fn cancellation_before_the_first_byte_performs_no_network_or_disk_work() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let entry = whisper_entry(
+            "http://127.0.0.1:9/must-not-be-requested".to_string(),
+            "unused".to_string(),
+            1,
+        );
+        let manager = ModelManager::with_catalog(dir.path().to_path_buf(), vec![entry]);
+        let cancellation = DownloadCancellation::default();
+        cancellation.cancel();
+
+        let result =
+            manager.download_with_cancellation("test-whisper", &cancellation, &mut |_, _| {});
+
+        assert_cancelled(&result);
+        assert!(!dir.path().join("models").exists());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cancellation_mid_artifact_cleans_staging_and_a_fresh_retry_installs() {
+        let server = MockServer::start().await;
+        let body = vec![0x5au8; 200_000];
+        let sha256 = sha256_hex(&body);
+        Mock::given(method("GET"))
+            .and(path("/ggml-test.bin"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(body.clone()))
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let entry = whisper_entry(
+            format!("{}/ggml-test.bin", server.uri()),
+            sha256,
+            body.len() as u64,
+        );
+        let manager = ModelManager::with_catalog(dir.path().to_path_buf(), vec![entry]);
+        let cancellation = DownloadCancellation::default();
+        let callback_cancellation = cancellation.clone();
+
+        let (first, manager) = tokio::task::spawn_blocking(move || {
+            let result = manager.download_with_cancellation(
+                "test-whisper",
+                &cancellation,
+                &mut |done, _| {
+                    if done > 0 {
+                        callback_cancellation.cancel();
+                    }
+                },
+            );
+            (result, manager)
+        })
+        .await
+        .expect("blocking task panicked");
+
+        assert_cancelled(&first);
+        assert!(!dir.path().join("models/ggml-test.bin").exists());
+        assert!(!dir.path().join("models/test-whisper.staging").exists());
+
+        let installed =
+            tokio::task::spawn_blocking(move || manager.download("test-whisper", &mut |_, _| {}))
+                .await
+                .expect("blocking task panicked")
+                .expect("a new token should allow a clean retry");
+        assert_eq!(fs::read(installed).expect("installed bytes"), body);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cancellation_between_multi_file_artifacts_never_publishes_the_model() {
+        let server = MockServer::start().await;
+        let encoder = vec![0x11u8; 1_000];
+        let tokens = vec![0x22u8; 500];
+        Mock::given(method("GET"))
+            .and(path("/encoder"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(encoder.clone()))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/tokens"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(tokens.clone()))
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let entry = multi_artifact_entry(
+            format!("{}/encoder", server.uri()),
+            sha256_hex(&encoder),
+            encoder.len() as u64,
+            format!("{}/tokens", server.uri()),
+            sha256_hex(&tokens),
+            tokens.len() as u64,
+        );
+        let manager = ModelManager::with_catalog(dir.path().to_path_buf(), vec![entry]);
+        let cancellation = DownloadCancellation::default();
+        let callback_cancellation = cancellation.clone();
+        let first_size = encoder.len() as u64;
+
+        let result = tokio::task::spawn_blocking(move || {
+            let mut boundary_seen = false;
+            manager.download_with_cancellation("test-multi", &cancellation, &mut |done, _| {
+                if done == first_size {
+                    if boundary_seen {
+                        callback_cancellation.cancel();
+                    }
+                    boundary_seen = true;
+                }
+            })
+        })
+        .await
+        .expect("blocking task panicked");
+
+        assert_cancelled(&result);
+        assert!(!dir.path().join("models/test-multi").exists());
+        assert!(!dir.path().join("models/test-multi.staging").exists());
+        let requests = server.received_requests().await.expect("request log");
+        assert_eq!(
+            requests.len(),
+            1,
+            "the second artifact must not be requested"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

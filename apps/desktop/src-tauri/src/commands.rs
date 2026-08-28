@@ -7,21 +7,18 @@
 //! here that touches disk, the keyring (a D-Bus round trip to Secret
 //! Service), SQLite, ALSA, or the network is therefore `async fn` and hands
 //! its actual work to `tauri::async_runtime::spawn_blocking`, mirroring
-//! `download_model`'s existing pattern: fetch `AppState` from the moved
-//! `AppHandle` *inside* the blocking closure (a `tauri::State` guard can't
-//! itself be moved across the closure's `'static` boundary). `cancel_dictation`
-//! is the one exception left synchronous: per `RuntimeHandle`'s own docs,
-//! every method besides `shutdown` just posts a message to a channel and
-//! returns immediately, so there is no blocking I/O to move off the main
-//! thread there.
+//! `download_model`'s existing pattern. Cancellation commands remain
+//! synchronous because they only flip an atomic flag or post a channel
+//! message and return immediately, with no blocking I/O on the main thread.
 
 use std::time::{Duration, Instant};
 
+use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use utter_core::{TextRefiner, Tone};
 use utter_refine::{LlmConfig, LlmRefiner};
-use utter_store::{HistoryEntry, ModelInfo, Settings};
+use utter_store::{DownloadCancelled, HistoryEntry, ModelInfo, Settings};
 
 use crate::events::{ModelProgress, Notice};
 use crate::permissions::PermissionReport;
@@ -38,6 +35,15 @@ const PROGRESS_MIN_INTERVAL: Duration = Duration::from_millis(500);
 /// ... or after this many percentage points of additional progress,
 /// whichever comes first, so a slow connection still reports promptly.
 const PROGRESS_MIN_PERCENT_STEP: u64 = 1;
+
+/// Cancellation is a normal resolved outcome; network, disk, and integrity
+/// failures still reject the command with an error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelDownloadOutcome {
+    Installed,
+    Cancelled,
+}
 
 #[tauri::command]
 pub async fn get_settings(app: AppHandle) -> Settings {
@@ -190,10 +196,11 @@ pub async fn list_models(app: AppHandle) -> Vec<ModelInfo> {
 }
 
 #[tauri::command]
-pub async fn download_model(app: AppHandle, id: String) -> Result<(), String> {
-    let models = {
+pub async fn download_model(app: AppHandle, id: String) -> Result<ModelDownloadOutcome, String> {
+    let (models, lease, cancellation) = {
         let state = app.state::<AppState>();
-        state.models.clone()
+        let (lease, cancellation) = state.model_operations.begin_download(&id)?;
+        (state.models.clone(), lease, cancellation)
     };
 
     let progress_app = app.clone();
@@ -201,10 +208,12 @@ pub async fn download_model(app: AppHandle, id: String) -> Result<(), String> {
     let download_id = id.clone();
 
     let result = tauri::async_runtime::spawn_blocking(move || {
+        // Keep the registry occupied through cleanup on every return path.
+        let _lease = lease;
         let mut last_emitted_done = 0u64;
         let mut last_emit_at = Instant::now();
 
-        models.download(&download_id, &mut |done, total| {
+        models.download_with_cancellation(&download_id, &cancellation, &mut |done, total| {
             let now = Instant::now();
             if should_emit_progress(
                 done,
@@ -230,9 +239,20 @@ pub async fn download_model(app: AppHandle, id: String) -> Result<(), String> {
     .await
     .map_err(|e| format!("download task failed to run: {e}"))?;
 
-    result
-        .map(|_path| ())
-        .map_err(|e| format!("failed to download model '{id}': {e}"))
+    match result {
+        Ok(_path) => Ok(ModelDownloadOutcome::Installed),
+        Err(error) if error.downcast_ref::<DownloadCancelled>().is_some() => {
+            Ok(ModelDownloadOutcome::Cancelled)
+        }
+        Err(error) => Err(format!("failed to download model '{id}': {error}")),
+    }
+}
+
+/// Requests cooperative cancellation; `download_model` resolves only after
+/// the blocking worker has removed its staging files.
+#[tauri::command]
+pub fn cancel_model_download(id: String, state: State<AppState>) -> Result<(), String> {
+    state.model_operations.cancel_download(&id).map(|_| ())
 }
 
 /// Decides whether a `model-progress` event should be emitted now.
@@ -270,12 +290,17 @@ fn should_emit_progress(
 
 #[tauri::command]
 pub async fn remove_model(app: AppHandle, id: String) -> Result<(), String> {
-    let result = tauri::async_runtime::spawn_blocking(move || {
+    let (models, lease) = {
         let state = app.state::<AppState>();
-        state
-            .models
-            .remove(&id)
-            .map_err(|e| format!("failed to remove model '{id}': {e}"))
+        let lease = state.model_operations.begin_remove(&id)?;
+        (state.models.clone(), lease)
+    };
+    let remove_id = id.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let _lease = lease;
+        models
+            .remove(&remove_id)
+            .map_err(|e| format!("failed to remove model '{remove_id}': {e}"))
     })
     .await
     .map_err(|e| format!("remove_model task failed to run: {e}"))?;
@@ -469,6 +494,18 @@ pub async fn test_refine(app: AppHandle, sample: String) -> Result<String, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_download_outcomes_have_a_stable_frontend_shape() {
+        assert_eq!(
+            serde_json::to_value(ModelDownloadOutcome::Installed).expect("serialize"),
+            serde_json::json!("installed")
+        );
+        assert_eq!(
+            serde_json::to_value(ModelDownloadOutcome::Cancelled).expect("serialize"),
+            serde_json::json!("cancelled")
+        );
+    }
 
     #[test]
     fn progress_always_emits_at_start() {

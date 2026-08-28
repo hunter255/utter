@@ -12,6 +12,8 @@
   let modelsError = $state('')
   let progress = $state<Record<string, { done: number; total: number }>>({})
   let busy = $state<Record<string, boolean>>({})
+  let activeDownloadId = $state<string | null>(null)
+  let cancellingDownload = $state(false)
   let sttConfigured = $state(false)
   let sttApiKey = $state('')
   let sttKeyJustSaved = $state(false)
@@ -20,6 +22,7 @@
   let whisperModels = $derived(models.filter((m) => m.role === 'final' && m.engine === 'whisper'))
   let sherpaModels = $derived(models.filter((m) => m.role === 'final' && m.engine === 'sherpa'))
   let streamingModels = $derived(previewModels(models))
+  let operationBusy = $derived(Object.values(busy).some(Boolean))
 
   let unlisten: (() => void) | undefined
 
@@ -63,22 +66,39 @@
   }
 
   async function install(id: string) {
+    if (operationBusy) return
     busy = { ...busy, [id]: true }
+    activeDownloadId = id
     modelsError = ''
     try {
-      await api.downloadModel(id)
-      await refreshModels()
+      const outcome = await api.downloadModel(id)
+      if (outcome === 'installed') await refreshModels()
     } catch (err) {
       modelsError = `Failed to download "${id}": ${String(err)}`
     } finally {
       busy = { ...busy, [id]: false }
+      activeDownloadId = null
+      cancellingDownload = false
       const rest = { ...progress }
       delete rest[id]
       progress = rest
     }
   }
 
+  async function cancelDownload(id: string) {
+    if (activeDownloadId !== id || cancellingDownload) return
+    cancellingDownload = true
+    modelsError = ''
+    try {
+      await api.cancelModelDownload(id)
+    } catch (err) {
+      cancellingDownload = false
+      modelsError = `Failed to cancel "${id}": ${String(err)}`
+    }
+  }
+
   async function remove(id: string) {
+    if (operationBusy) return
     busy = { ...busy, [id]: true }
     modelsError = ''
     try {
@@ -124,17 +144,24 @@
           <div class="model-actions">
             {#if model.installed}
               <span class="badge badge-installed">Installed</span>
-              <button type="button" onclick={() => remove(model.id)} disabled={busy[model.id]}>
+              <button type="button" onclick={() => remove(model.id)} disabled={operationBusy}>
                 Remove
               </button>
+            {:else if activeDownloadId === model.id}
+              <button
+                type="button"
+                class="cancel"
+                onclick={() => cancelDownload(model.id)}
+                disabled={cancellingDownload}
+              >{cancellingDownload ? 'Cancelling…' : 'Cancel'}</button>
             {:else}
-              <button type="button" onclick={() => install(model.id)} disabled={busy[model.id]}>
-                {busy[model.id] ? 'Downloading…' : 'Install'}
+              <button type="button" onclick={() => install(model.id)} disabled={operationBusy}>
+                Install
               </button>
             {/if}
           </div>
         </div>
-        {#if busy[model.id]}
+        {#if activeDownloadId === model.id}
           <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={progressPercent(model.id) ?? undefined}>
             <div class="progress-fill" style:width="{progressPercent(model.id) ?? 0}%"></div>
           </div>
@@ -156,17 +183,24 @@
           <div class="model-actions">
             {#if model.installed}
               <span class="badge badge-installed">Installed</span>
-              <button type="button" onclick={() => remove(model.id)} disabled={busy[model.id]}>
+              <button type="button" onclick={() => remove(model.id)} disabled={operationBusy}>
                 Remove
               </button>
+            {:else if activeDownloadId === model.id}
+              <button
+                type="button"
+                class="cancel"
+                onclick={() => cancelDownload(model.id)}
+                disabled={cancellingDownload}
+              >{cancellingDownload ? 'Cancelling…' : 'Cancel'}</button>
             {:else}
-              <button type="button" onclick={() => install(model.id)} disabled={busy[model.id]}>
-                {busy[model.id] ? 'Downloading…' : 'Install'}
+              <button type="button" onclick={() => install(model.id)} disabled={operationBusy}>
+                Install
               </button>
             {/if}
           </div>
         </div>
-        {#if busy[model.id]}
+        {#if activeDownloadId === model.id}
           <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={progressPercent(model.id) ?? undefined}>
             <div class="progress-fill" style:width="{progressPercent(model.id) ?? 0}%"></div>
           </div>
@@ -188,17 +222,24 @@
           <div class="model-actions">
             {#if model.installed}
               <span class="badge badge-installed">Installed</span>
-              <button type="button" onclick={() => remove(model.id)} disabled={busy[model.id]}>
+              <button type="button" onclick={() => remove(model.id)} disabled={operationBusy}>
                 Remove
               </button>
+            {:else if activeDownloadId === model.id}
+              <button
+                type="button"
+                class="cancel"
+                onclick={() => cancelDownload(model.id)}
+                disabled={cancellingDownload}
+              >{cancellingDownload ? 'Cancelling…' : 'Cancel'}</button>
             {:else}
-              <button type="button" onclick={() => install(model.id)} disabled={busy[model.id]}>
-                {busy[model.id] ? 'Downloading…' : 'Install'}
+              <button type="button" onclick={() => install(model.id)} disabled={operationBusy}>
+                Install
               </button>
             {/if}
           </div>
         </div>
-        {#if busy[model.id]}
+        {#if activeDownloadId === model.id}
           <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={progressPercent(model.id) ?? undefined}>
             <div class="progress-fill" style:width="{progressPercent(model.id) ?? 0}%"></div>
           </div>
@@ -290,6 +331,10 @@
   button:disabled {
     opacity: 0.55;
     cursor: not-allowed;
+  }
+
+  button.cancel {
+    color: var(--danger);
   }
 
   .badge {
