@@ -17,7 +17,7 @@ pub use identity::{
 pub use migrate::migrate_v1;
 pub use models::{
     DownloadCancellation, DownloadCancelled, DownloadStalled, ModelInfo, ModelManager, ModelRole,
-    PerformanceClass,
+    PerformanceClass, StreamingModelFamily,
 };
 pub use profile::{DraftCfg, LanguageProfile, RecognitionCfg, RecognitionPromptMode, RefinePolicy};
 pub use settings::{load, save, HudPlacement, Settings};

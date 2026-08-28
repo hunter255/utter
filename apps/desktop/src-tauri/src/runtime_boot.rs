@@ -570,18 +570,52 @@ const DRAFT_THREADS: usize = if cfg!(all(target_os = "macos", target_arch = "aar
     1
 };
 
-/// The [`utter_stt::SherpaConfig`] every draft engine is loaded with.
-///
-/// Split out of [`build_streaming_draft`] so that [`DRAFT_THREADS`] actually
-/// reaches something a test can look at: the only other observer of it is
-/// onnxruntime, well past the point any test can go. It is the sole
-/// construction site of a draft `SherpaConfig`, so what this returns is what
-/// the draft engine gets.
+/// T-One's deliberately conservative inference budget until its latency and
+/// accuracy have been measured on the same corpus as the Zipformer previews.
 #[cfg(feature = "sherpa")]
-fn draft_sherpa_config(dictionary_terms: &[String]) -> utter_stt::SherpaConfig {
-    utter_stt::SherpaConfig {
-        num_threads: DRAFT_THREADS,
-        hotwords: dictionary_terms.to_vec(),
+const T_ONE_DRAFT_THREADS: usize = 1;
+
+/// Builds the family-specific configuration for a streaming preview model,
+/// plus an informational notice when the selected family cannot use a
+/// preview-only feature.
+///
+/// This is the sole construction site of [`utter_stt::SherpaStreamingConfig`]
+/// in the desktop app. Keeping the family match here makes two safety rules
+/// explicit and testable before the native loader is reached: transducers get
+/// the profile dictionary and the benchmarked [`DRAFT_THREADS`] budget;
+/// T-One gets one thread and never receives dictionary terms, because
+/// sherpa-onnx hotwords are a transducer-only feature.
+#[cfg(feature = "sherpa")]
+fn draft_streaming_config(
+    model_id: &str,
+    family: Option<utter_store::StreamingModelFamily>,
+    dictionary_terms: &[String],
+) -> Result<(utter_stt::SherpaStreamingConfig, Option<String>), String> {
+    let Some(family) = family else {
+        return Err(format!(
+            "preview model \"{model_id}\" has no streaming family in the model catalog (catalog \
+             configuration error). Dictation is unaffected — only the live preview is off."
+        ));
+    };
+
+    match family {
+        utter_store::StreamingModelFamily::Transducer => Ok((
+            utter_stt::SherpaStreamingConfig::Transducer(utter_stt::SherpaConfig {
+                num_threads: DRAFT_THREADS,
+                hotwords: dictionary_terms.to_vec(),
+            }),
+            None,
+        )),
+        utter_store::StreamingModelFamily::TOneCtc => Ok((
+            utter_stt::SherpaStreamingConfig::TOneCtc {
+                num_threads: T_ONE_DRAFT_THREADS,
+            },
+            (!dictionary_terms.is_empty()).then(|| {
+                "T-One CTC does not support dictionary hotwords. Live preview works without \
+                 biasing; the final transcript is unaffected."
+                    .to_string()
+            }),
+        )),
     }
 }
 
@@ -598,6 +632,21 @@ fn build_streaming_draft(
         let reason = format!("{reason}. Dictation is unaffected — only the live preview is off.");
         return (None, Some(reason));
     }
+
+    // Family before integrity, for the same process-liveness reason as the
+    // engine-kind guard above. A valid streaming model can still have one of
+    // several mutually incompatible native layouts; inferring a layout from
+    // filenames or silently defaulting to the transducer path could hand an
+    // intact T-One model to the wrong C++ configuration and terminate the
+    // process across the FFI boundary.
+    let (config, capability_notice) = match draft_streaming_config(
+        model_id,
+        models.streaming_family_of(model_id),
+        dictionary_terms,
+    ) {
+        Ok(config) => config,
+        Err(reason) => return (None, Some(reason)),
+    };
 
     // `verify_installed`, never `path_for`: a truncated or otherwise damaged
     // model makes sherpa-onnx's C++ layer call `_Exit()` on load, taking the
@@ -622,8 +671,8 @@ fn build_streaming_draft(
         }
     };
 
-    match utter_stt::SherpaStreamingEngine::load(&path, draft_sherpa_config(dictionary_terms)) {
-        Ok(engine) => (Some(Box::new(engine)), None),
+    match utter_stt::SherpaStreamingEngine::load_with_config(&path, config) {
+        Ok(engine) => (Some(Box::new(engine)), capability_notice),
         Err(e) => {
             let reason = format!(
                 "failed to load preview model \"{model_id}\": {e}. Dictation is unaffected — \
@@ -1215,11 +1264,12 @@ mod tests {
     }
 
     /// The catalog installs every streaming model under exactly the file
-    /// names `SherpaStreamingEngine::load` opens.
+    /// names `SherpaStreamingEngine::load_with_config` opens for that model's declared
+    /// family.
     ///
     /// The two halves live in crates that cannot see each other —
-    /// `utter-store` decides the installed names via `Artifact.name`,
-    /// `utter-stt` resolves four fixed ones — and this crate is the first
+    /// `utter-store` decides the installed names and family,
+    /// `utter-stt` resolves the family's fixed set — and this crate is the first
     /// place downstream of both. Nothing else checks them: renaming an
     /// artifact back to its upstream file name (`encoder.int8.onnx`,
     /// `encoder-epoch-99-avg-1.int8.onnx`) leaves every other test green
@@ -1237,9 +1287,6 @@ mod tests {
     fn every_streaming_catalog_entry_installs_the_filenames_the_loader_resolves() {
         let models = ModelManager::new(std::path::PathBuf::from("/nonexistent"));
 
-        let mut expected = utter_stt::sherpa::STREAMING_MODEL_FILES.to_vec();
-        expected.sort_unstable();
-
         let ids: Vec<String> = models
             .catalog()
             .into_iter()
@@ -1252,13 +1299,27 @@ mod tests {
         );
 
         for id in ids {
+            let mut expected = match models
+                .streaming_family_of(&id)
+                .expect("every streaming catalog entry must declare its native family")
+            {
+                utter_store::StreamingModelFamily::Transducer => {
+                    utter_stt::sherpa::STREAMING_TRANSDUCER_MODEL_FILES.to_vec()
+                }
+                utter_store::StreamingModelFamily::TOneCtc => {
+                    utter_stt::sherpa::STREAMING_T_ONE_CTC_MODEL_FILES.to_vec()
+                }
+            };
+            expected.sort_unstable();
+
             let mut names = models
                 .artifact_names(&id)
                 .expect("an id taken from the catalog is in the catalog");
             names.sort_unstable();
             assert_eq!(
                 names, expected,
-                "{id} must install the artifact names SherpaStreamingEngine::load resolves, or \
+                "{id} must install the artifact names SherpaStreamingEngine::load_with_config \
+                 resolves, or \
                  its preview will never load"
             );
         }
@@ -1269,9 +1330,9 @@ mod tests {
     ///
     /// Nothing downstream of here can be observed from a test — the number's
     /// only other reader is onnxruntime — so this is asserted at the last
-    /// point it is still visible, [`draft_sherpa_config`], which is the sole
-    /// construction site of a draft `SherpaConfig`. Without it the constant
-    /// is pinned by nothing at all: swapping it for `sherpa_thread_count()`
+    /// point it is still visible, [`draft_streaming_config`], which is the sole
+    /// construction site of a draft `SherpaStreamingConfig`. Without it the
+    /// constant is pinned by nothing at all: swapping it for `sherpa_thread_count()`
     /// leaves the whole suite green while letting a courtesy preview consume
     /// the final engine's full CPU budget; that hurts desktop responsiveness
     /// and only shows up on a stopwatch.
@@ -1284,7 +1345,15 @@ mod tests {
     #[cfg(feature = "sherpa")]
     #[test]
     fn the_draft_engine_uses_the_benchmarked_platform_thread_budget() {
-        let cfg = draft_sherpa_config(&["Kubernetes".to_string()]);
+        let (cfg, notice) = draft_streaming_config(
+            "zipformer-ru-small",
+            Some(utter_store::StreamingModelFamily::Transducer),
+            &["Kubernetes".to_string()],
+        )
+        .expect("a transducer family is configured");
+        let utter_stt::SherpaStreamingConfig::Transducer(cfg) = cfg else {
+            panic!("a transducer catalog entry must produce transducer config");
+        };
 
         let expected = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
             2
@@ -1299,6 +1368,49 @@ mod tests {
             cfg.hotwords,
             vec!["Kubernetes".to_string()],
             "the preview is biased by the same dictionary terms the final engine is"
+        );
+        assert_eq!(notice, None, "transducers support dictionary hotwords");
+    }
+
+    /// T-One is CTC, not a transducer: it gets the conservative one-thread
+    /// budget and its config has no place to smuggle dictionary hotwords into
+    /// the native loader. A non-empty dictionary is therefore informational,
+    /// not a reason to disable an otherwise working preview.
+    #[cfg(feature = "sherpa")]
+    #[test]
+    fn t_one_preview_uses_one_thread_and_reports_unsupported_dictionary_biasing() {
+        let (cfg, notice) = draft_streaming_config(
+            "t-one-russian",
+            Some(utter_store::StreamingModelFamily::TOneCtc),
+            &["Kubernetes".to_string()],
+        )
+        .expect("T-One remains usable when the dictionary is non-empty");
+
+        let utter_stt::SherpaStreamingConfig::TOneCtc { num_threads } = cfg else {
+            panic!("a T-One catalog entry must produce T-One CTC config");
+        };
+        assert_eq!(num_threads, 1, "T-One starts with its measured-safe budget");
+
+        let notice = notice.expect("ignored preview hotwords must be explained");
+        assert!(notice.contains("does not support dictionary hotwords"));
+        assert!(notice.contains("Live preview works without biasing"));
+        assert!(notice.contains("the final transcript is unaffected"));
+    }
+
+    /// Missing family metadata must never silently choose the legacy
+    /// transducer layout: the wrong native model configuration can terminate
+    /// the process before Rust gets an error back.
+    #[cfg(feature = "sherpa")]
+    #[test]
+    fn a_streaming_model_without_family_metadata_disables_preview_safely() {
+        let reason = draft_streaming_config("future-preview", None, &[])
+            .expect_err("missing family metadata must not default to transducer");
+
+        assert!(reason.contains("future-preview"), "got {reason:?}");
+        assert!(reason.contains("configuration error"), "got {reason:?}");
+        assert!(
+            reason.contains("only the live preview is off"),
+            "the final transcript must keep working, got {reason:?}"
         );
     }
 

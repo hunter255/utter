@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use sherpa_onnx::{
     OfflineModelConfig, OfflineRecognizer, OfflineRecognizerConfig, OfflineTransducerModelConfig,
     OnlineModelConfig, OnlineRecognizer, OnlineRecognizerConfig, OnlineStream,
-    OnlineTransducerModelConfig,
+    OnlineToneCtcModelConfig, OnlineTransducerModelConfig,
 };
 use utter_core::{SttEngine, SttError, TranscribeOptions, Transcript, SAMPLE_RATE};
 
@@ -30,9 +30,9 @@ use utter_core::{SttEngine, SttError, TranscribeOptions, Transcript, SAMPLE_RATE
 /// shared name.
 const ENCODER_CANDIDATES: [&str; 2] = ["encoder.int8.onnx", "encoder.onnx"];
 
-/// Configuration for [`SherpaOfflineEngine::load`] and
-/// [`SherpaStreamingEngine::load`]. Shared between the two engines rather
-/// than duplicated: both load a transducer from a model directory and both
+/// Configuration for [`SherpaOfflineEngine::load`] and the transducer variant
+/// of [`SherpaStreamingEngine::load`]. Shared between the two transducer
+/// engines rather than duplicated: both load from a model directory and both
 /// take the same knobs.
 #[derive(Debug, Clone, Default)]
 pub struct SherpaConfig {
@@ -41,6 +41,29 @@ pub struct SherpaConfig {
     /// Dictionary terms to bias recognition towards. Only takes effect once
     /// decoding uses `modified_beam_search` — see [`decoding_method`].
     pub hotwords: Vec<String>,
+}
+
+/// Model-family-specific configuration for
+/// [`SherpaStreamingEngine::load_with_config`].
+///
+/// Streaming transducers support dictionary terms as recognition hotwords.
+/// T-One is a CTC model, so it always uses greedy search and a plain stream;
+/// accepting a [`SherpaConfig`] for it would misleadingly suggest that its
+/// `hotwords` field takes effect.
+#[derive(Debug, Clone)]
+pub enum SherpaStreamingConfig {
+    /// The existing Zipformer transducer path, including hotword-aware beam
+    /// search when the dictionary is non-empty.
+    Transducer(SherpaConfig),
+    /// A streaming T-One CTC model. CTC does not support sherpa-onnx's
+    /// transducer hotword path.
+    TOneCtc { num_threads: usize },
+}
+
+impl Default for SherpaStreamingConfig {
+    fn default() -> Self {
+        Self::Transducer(SherpaConfig::default())
+    }
 }
 
 /// A sherpa-onnx offline speech-to-text engine, loaded from a directory of
@@ -341,15 +364,10 @@ fn build_hotwords_arg(hotwords: &[String]) -> Result<Option<String>, SttError> {
 ///
 /// This assumes the model being decoded is a transducer: the same upstream
 /// page states that hotwords only work for that model family.
-/// [`SherpaOfflineEngine::load`] and [`SherpaStreamingEngine::load`] only
-/// ever build transducer configs (see their doc comments), so that
-/// assumption always holds at both call sites. A loader that also accepted
-/// CTC models would need to detect that case
-/// itself, log a warning naming the limitation, and force
-/// `"greedy_search"` regardless of the dictionary — silently dropping
-/// hotwords is safer than failing the load, but applying this function's
-/// result unconditionally would silently ignore them instead of falling
-/// back deliberately.
+/// [`SherpaOfflineEngine::load`] and the transducer arm of
+/// `build_streaming_recognizer_config` are the only call sites, so that
+/// assumption holds. The T-One CTC arm deliberately bypasses this function,
+/// accepts no dictionary input, and pins `"greedy_search"` instead.
 pub fn decoding_method(hotwords: &[String]) -> &'static str {
     if hotwords.is_empty() {
         "greedy_search"
@@ -391,8 +409,8 @@ pub fn default_threads(available: usize) -> usize {
 }
 
 /// A sherpa-onnx online (streaming) speech-to-text engine, loaded from a
-/// directory of streaming transducer model files and reusable across many
-/// begin/feed/finish transcription cycles.
+/// directory containing either a streaming transducer or T-One CTC model and
+/// reusable across many begin/feed/finish transcription cycles.
 ///
 /// Unlike [`SherpaOfflineEngine`], this decodes incrementally as samples
 /// arrive in [`SttEngine::feed`], which is what lets it surface a partial
@@ -400,8 +418,8 @@ pub fn default_threads(available: usize) -> usize {
 pub struct SherpaStreamingEngine {
     /// The loaded recognizer. Only `None` for the `test_engine` double used
     /// in this module's tests to exercise the begin/feed/finish ordering
-    /// rules without a real model; [`SherpaStreamingEngine::load`] is the
-    /// sole public constructor and always sets it to `Some`.
+    /// rules without a real model; the public constructors always set it to
+    /// `Some`.
     recognizer: Option<OnlineRecognizer>,
     /// Joined hotwords string for `create_stream_with_hotwords`, or `None`
     /// when the dictionary is empty and a plain stream should be used.
@@ -418,6 +436,47 @@ pub struct SherpaStreamingEngine {
     /// The most recent partial text handed back by [`SttEngine::feed`], so
     /// [`track_partial`] can suppress re-emitting an unchanged hypothesis.
     last_partial: String,
+    /// Model-family behavior that cannot be represented by the native
+    /// recognizer alone: T-One needs boundary padding and must never create a
+    /// hotword stream, while transducers keep the existing behavior.
+    family: StreamingModelFamily,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamingModelFamily {
+    Transducer,
+    TOneCtc,
+}
+
+#[derive(Debug)]
+struct BuiltStreamingRecognizerConfig {
+    recognizer: OnlineRecognizerConfig,
+    hotwords: Option<String>,
+    family: StreamingModelFamily,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StreamPadding {
+    sample_rate: i32,
+    leading_samples: usize,
+    trailing_samples: usize,
+}
+
+/// T-One's native frame rate and the boundary padding prescribed by its
+/// official streaming example. Padding is supplied at the same 16 kHz rate
+/// as the captured audio so sherpa-onnx sees one consistent input clock:
+/// 4,800 samples before speech (300 ms) and 9,600 after it (600 ms).
+const T_ONE_PADDING: StreamPadding = StreamPadding {
+    sample_rate: SAMPLE_RATE as i32,
+    leading_samples: 4_800,
+    trailing_samples: 9_600,
+};
+
+fn stream_padding(family: StreamingModelFamily) -> Option<StreamPadding> {
+    match family {
+        StreamingModelFamily::Transducer => None,
+        StreamingModelFamily::TOneCtc => Some(T_ONE_PADDING),
+    }
 }
 
 // `OnlineRecognizer` and `OnlineStream` do not implement `Debug` (they wrap
@@ -429,12 +488,13 @@ impl std::fmt::Debug for SherpaStreamingEngine {
             .field("loaded", &self.recognizer.is_some())
             .field("hotwords", &self.hotwords)
             .field("in_progress", &self.opts.is_some())
+            .field("family", &self.family)
             .finish()
     }
 }
 
-/// The four files a streaming model directory must contain, in the order
-/// [`SherpaStreamingEngine::load`] resolves them.
+/// The four files a streaming transducer model directory must contain, in
+/// the order [`SherpaStreamingEngine::load`] resolves them.
 ///
 /// This is one half of a contract with whatever installed the directory: the
 /// model catalog normalises every streaming artifact to these names, no
@@ -443,16 +503,34 @@ impl std::fmt::Debug for SherpaStreamingEngine {
 /// owns the other half can be held against it rather than restating it — a
 /// renamed artifact would otherwise cost nothing but a preview that silently
 /// never loads.
-pub const STREAMING_MODEL_FILES: [&str; 4] =
+pub const STREAMING_TRANSDUCER_MODEL_FILES: [&str; 4] =
     ["encoder.onnx", "decoder.onnx", "joiner.onnx", "tokens.txt"];
 
+/// Backwards-compatible name for the original transducer-only artifact set.
+/// New family-aware code should use [`STREAMING_TRANSDUCER_MODEL_FILES`].
+pub const STREAMING_MODEL_FILES: [&str; 4] = STREAMING_TRANSDUCER_MODEL_FILES;
+
+/// The files a streaming T-One CTC model directory must contain, in the
+/// order [`SherpaStreamingEngine::load_with_config`] resolves them.
+pub const STREAMING_T_ONE_CTC_MODEL_FILES: [&str; 2] = ["model.onnx", "tokens.txt"];
+
 impl SherpaStreamingEngine {
-    /// Loads a sherpa-onnx online (streaming) transducer model from `dir`.
+    /// Loads a sherpa-onnx streaming transducer model from `dir`.
+    ///
+    /// This preserves the original transducer-only API. Use
+    /// [`Self::load_with_config`] when the model family is selected at
+    /// runtime.
+    pub fn load(dir: &Path, cfg: SherpaConfig) -> Result<Self, SttError> {
+        Self::load_with_config(dir, SherpaStreamingConfig::Transducer(cfg))
+    }
+
+    /// Loads a family-selected sherpa-onnx online model from `dir`.
     ///
     /// Unlike [`SherpaOfflineEngine::load`], filenames are not tried against
     /// a candidate list: the catalog installs streaming models under exactly
-    /// the names in [`STREAMING_MODEL_FILES`], so a single fixed name is
-    /// resolved for each.
+    /// the names in [`STREAMING_TRANSDUCER_MODEL_FILES`] or
+    /// [`STREAMING_T_ONE_CTC_MODEL_FILES`], so a single fixed name is resolved
+    /// for each.
     ///
     /// `dir` must be a model *directory* as resolved by
     /// `ModelManager::path_for` — never a bare catalog id, for the same
@@ -460,57 +538,20 @@ impl SherpaStreamingEngine {
     ///
     /// # Errors
     /// Returns [`SttError::ModelNotFound`] if `dir` does not exist, or if any
-    /// of the expected encoder/decoder/joiner/tokens files are missing from
-    /// it. Returns [`SttError::Engine`] if `cfg.hotwords` contains an
-    /// interior null byte, if any resolved path is not valid UTF-8, or if
-    /// sherpa-onnx refuses to build a recognizer from files that are all
-    /// present — see [`SherpaOfflineEngine::load`]'s doc comment for why
-    /// that last case is treated as an engine error rather than a
-    /// missing-model one.
-    pub fn load(dir: &Path, cfg: SherpaConfig) -> Result<Self, SttError> {
-        if !dir.is_dir() {
-            return Err(SttError::ModelNotFound(dir.display().to_string()));
-        }
-
-        let hotwords = build_hotwords_arg(&cfg.hotwords)?;
-
-        let [encoder_name, decoder_name, joiner_name, tokens_name] = STREAMING_MODEL_FILES;
-        let encoder = resolve_required_file(dir, &[encoder_name])?;
-        let decoder = resolve_required_file(dir, &[decoder_name])?;
-        let joiner = resolve_required_file(dir, &[joiner_name])?;
-        let tokens = resolve_required_file(dir, &[tokens_name])?;
-
-        let config = OnlineRecognizerConfig {
-            model_config: OnlineModelConfig {
-                transducer: OnlineTransducerModelConfig {
-                    encoder: Some(path_to_string(&encoder)?),
-                    decoder: Some(path_to_string(&decoder)?),
-                    joiner: Some(path_to_string(&joiner)?),
-                },
-                tokens: Some(path_to_string(&tokens)?),
-                num_threads: cfg.num_threads.clamp(1, i32::MAX as usize) as i32,
-                // These are icefall-style streaming zipformer transducers,
-                // not NeMo exports (unlike the offline engine's catalog
-                // models) — model_type is left at the config default so
-                // sherpa-onnx auto-detects the layout instead.
-                ..Default::default()
-            },
-            decoding_method: Some(decoding_method(&cfg.hotwords).to_string()),
-            // Both explicit, never inherited. This is the call site the trap
-            // actually bites: `OnlineRecognizerConfig::default` sets
-            // `max_active_paths` to 0, so `..Default::default()` alone would
-            // run the beam search `decoding_method` just selected with a beam
-            // width of zero. See the constants' doc comments.
-            max_active_paths: MAX_ACTIVE_PATHS,
-            hotwords_score: HOTWORDS_SCORE,
-            ..Default::default()
-        };
+    /// file required by the selected family is missing from it. Returns
+    /// [`SttError::Engine`] if transducer hotwords contain an interior null
+    /// byte, if any resolved path is not valid UTF-8, or if sherpa-onnx
+    /// refuses to build a recognizer from files that are all present — see
+    /// [`SherpaOfflineEngine::load`]'s doc comment for why that last case is
+    /// treated as an engine error rather than a missing-model one.
+    pub fn load_with_config(dir: &Path, cfg: SherpaStreamingConfig) -> Result<Self, SttError> {
+        let built = build_streaming_recognizer_config(dir, &cfg)?;
 
         // As in `SherpaOfflineEngine::load`: every expected file is already
         // confirmed present above, so a rejection here means sherpa-onnx
         // itself refused their contents, which is an engine failure rather
         // than a missing-model one.
-        let recognizer = OnlineRecognizer::create(&config).ok_or_else(|| {
+        let recognizer = OnlineRecognizer::create(&built.recognizer).ok_or_else(|| {
             SttError::Engine(format!(
                 "sherpa-onnx rejected the model in {}",
                 dir.display()
@@ -519,11 +560,130 @@ impl SherpaStreamingEngine {
 
         Ok(Self {
             recognizer: Some(recognizer),
-            hotwords,
+            hotwords: built.hotwords,
             opts: None,
             stream: None,
             last_partial: String::new(),
+            family: built.family,
         })
+    }
+}
+
+/// Resolves a streaming model's files and builds the native recognizer
+/// configuration without calling into sherpa-onnx.
+///
+/// Keeping policy here makes the two families unit-testable with harmless
+/// placeholder files: tests can verify which model slot, decoder and hotword
+/// behavior are selected without asking ONNX Runtime to parse invalid data.
+fn build_streaming_recognizer_config(
+    dir: &Path,
+    cfg: &SherpaStreamingConfig,
+) -> Result<BuiltStreamingRecognizerConfig, SttError> {
+    if !dir.is_dir() {
+        return Err(SttError::ModelNotFound(dir.display().to_string()));
+    }
+
+    match cfg {
+        SherpaStreamingConfig::Transducer(cfg) => {
+            let hotwords = build_hotwords_arg(&cfg.hotwords)?;
+            let [encoder_name, decoder_name, joiner_name, tokens_name] =
+                STREAMING_TRANSDUCER_MODEL_FILES;
+            let encoder = resolve_required_file(dir, &[encoder_name])?;
+            let decoder = resolve_required_file(dir, &[decoder_name])?;
+            let joiner = resolve_required_file(dir, &[joiner_name])?;
+            let tokens = resolve_required_file(dir, &[tokens_name])?;
+
+            let config = OnlineRecognizerConfig {
+                model_config: OnlineModelConfig {
+                    transducer: OnlineTransducerModelConfig {
+                        encoder: Some(path_to_string(&encoder)?),
+                        decoder: Some(path_to_string(&decoder)?),
+                        joiner: Some(path_to_string(&joiner)?),
+                    },
+                    tokens: Some(path_to_string(&tokens)?),
+                    num_threads: cfg.num_threads.clamp(1, i32::MAX as usize) as i32,
+                    // These are icefall-style streaming Zipformer
+                    // transducers, not NeMo exports (unlike the offline
+                    // engine's catalog models), so auto-detect the layout.
+                    ..Default::default()
+                },
+                decoding_method: Some(decoding_method(&cfg.hotwords).to_string()),
+                // Preserve the existing hotword-aware beam-search policy.
+                // OnlineRecognizerConfig defaults this width to zero, which
+                // would break modified beam search for a non-empty dictionary.
+                max_active_paths: MAX_ACTIVE_PATHS,
+                hotwords_score: HOTWORDS_SCORE,
+                ..Default::default()
+            };
+
+            Ok(BuiltStreamingRecognizerConfig {
+                recognizer: config,
+                hotwords,
+                family: StreamingModelFamily::Transducer,
+            })
+        }
+        SherpaStreamingConfig::TOneCtc { num_threads } => {
+            let [model_name, tokens_name] = STREAMING_T_ONE_CTC_MODEL_FILES;
+            let model = resolve_required_file(dir, &[model_name])?;
+            let tokens = resolve_required_file(dir, &[tokens_name])?;
+
+            let config = OnlineRecognizerConfig {
+                model_config: OnlineModelConfig {
+                    t_one_ctc: OnlineToneCtcModelConfig {
+                        model: Some(path_to_string(&model)?),
+                    },
+                    tokens: Some(path_to_string(&tokens)?),
+                    num_threads: (*num_threads).clamp(1, i32::MAX as usize) as i32,
+                    ..Default::default()
+                },
+                // sherpa-onnx hotwords and modified beam search are
+                // transducer-only. T-One therefore deliberately has no
+                // dictionary input and always creates a plain stream.
+                decoding_method: Some("greedy_search".to_string()),
+                ..Default::default()
+            };
+
+            Ok(BuiltStreamingRecognizerConfig {
+                recognizer: config,
+                hotwords: None,
+                family: StreamingModelFamily::TOneCtc,
+            })
+        }
+    }
+}
+
+/// Creates the native stream according to its model family. T-One always
+/// uses the plain stream constructor and receives its required leading
+/// silence before any microphone audio; transducers retain their existing
+/// optional-hotword behavior exactly.
+fn create_online_stream(
+    recognizer: &OnlineRecognizer,
+    family: StreamingModelFamily,
+    hotwords: Option<&str>,
+) -> OnlineStream {
+    let stream = match family {
+        StreamingModelFamily::Transducer => match hotwords {
+            Some(hotwords) => recognizer.create_stream_with_hotwords(hotwords),
+            None => recognizer.create_stream(),
+        },
+        StreamingModelFamily::TOneCtc => {
+            debug_assert!(hotwords.is_none(), "T-One CTC does not support hotwords");
+            recognizer.create_stream()
+        }
+    };
+
+    if let Some(padding) = stream_padding(family) {
+        let silence = vec![0.0_f32; padding.leading_samples];
+        stream.accept_waveform(padding.sample_rate, &silence);
+    }
+
+    stream
+}
+
+fn append_trailing_padding(stream: &OnlineStream, family: StreamingModelFamily) {
+    if let Some(padding) = stream_padding(family) {
+        let silence = vec![0.0_f32; padding.trailing_samples];
+        stream.accept_waveform(padding.sample_rate, &silence);
     }
 }
 
@@ -553,12 +713,12 @@ impl SttEngine for SherpaStreamingEngine {
         let recognizer = self
             .recognizer
             .as_ref()
-            .expect("invariant: SherpaStreamingEngine::load always sets recognizer to Some");
+            .expect("invariant: streaming engine constructors always set recognizer to Some");
         let hotwords = self.hotwords.as_deref();
-        let stream = self.stream.get_or_insert_with(|| match hotwords {
-            Some(hotwords) => recognizer.create_stream_with_hotwords(hotwords),
-            None => recognizer.create_stream(),
-        });
+        let family = self.family;
+        let stream = self
+            .stream
+            .get_or_insert_with(|| create_online_stream(recognizer, family, hotwords));
 
         stream.accept_waveform(SAMPLE_RATE as i32, &samples_to_f32(samples));
         while recognizer.is_ready(stream) {
@@ -577,16 +737,17 @@ impl SttEngine for SherpaStreamingEngine {
         let recognizer = self
             .recognizer
             .as_ref()
-            .expect("invariant: SherpaStreamingEngine::load always sets recognizer to Some");
+            .expect("invariant: streaming engine constructors always set recognizer to Some");
         let hotwords = self.hotwords.as_deref();
         // `feed` is expected to have run at least once, but a begin()
         // immediately followed by finish() must not panic — fall back to a
         // fresh, silent stream so it decodes to empty text instead.
-        let stream = self.stream.take().unwrap_or_else(|| match hotwords {
-            Some(hotwords) => recognizer.create_stream_with_hotwords(hotwords),
-            None => recognizer.create_stream(),
-        });
+        let stream = self
+            .stream
+            .take()
+            .unwrap_or_else(|| create_online_stream(recognizer, self.family, hotwords));
 
+        append_trailing_padding(&stream, self.family);
         stream.input_finished();
         while recognizer.is_ready(&stream) {
             recognizer.decode(&stream);
@@ -717,6 +878,7 @@ mod tests {
             opts: None,
             stream: None,
             last_partial: String::new(),
+            family: StreamingModelFamily::Transducer,
         }
     }
 
@@ -724,7 +886,7 @@ mod tests {
     fn streaming_loading_a_missing_model_directory_reports_model_not_found() {
         let err =
             SherpaStreamingEngine::load(Path::new("/nonexistent/model"), SherpaConfig::default())
-                .expect_err("a missing model directory must not load");
+                .expect_err("the compatible transducer loader must remain usable");
         assert!(matches!(err, SttError::ModelNotFound(_)));
     }
 
@@ -733,11 +895,104 @@ mod tests {
         let dir = std::env::temp_dir().join("utter-stt-test-sherpa-streaming-empty-model");
         std::fs::create_dir_all(&dir).expect("failed to create empty test model dir");
 
-        let err = SherpaStreamingEngine::load(&dir, SherpaConfig::default())
+        let err = SherpaStreamingEngine::load_with_config(&dir, SherpaStreamingConfig::default())
             .expect_err("a model directory missing its files must not load");
         let _ = std::fs::remove_dir_all(&dir);
 
         assert!(matches!(err, SttError::ModelNotFound(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn streaming_t_one_missing_required_files_reports_model_not_found() {
+        let dir = std::env::temp_dir().join("utter-stt-test-sherpa-t-one-empty-model");
+        std::fs::create_dir_all(&dir).expect("failed to create empty test model dir");
+
+        let err = build_streaming_recognizer_config(
+            &dir,
+            &SherpaStreamingConfig::TOneCtc { num_threads: 2 },
+        )
+        .expect_err("a T-One directory missing its files must not load");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(matches!(err, SttError::ModelNotFound(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn streaming_transducer_config_preserves_hotword_beam_search_policy() {
+        let dir = std::env::temp_dir().join("utter-stt-test-sherpa-transducer-config");
+        std::fs::create_dir_all(&dir).expect("failed to create test model dir");
+        for name in STREAMING_TRANSDUCER_MODEL_FILES {
+            std::fs::write(dir.join(name), b"placeholder").expect("failed to write test file");
+        }
+
+        let built = build_streaming_recognizer_config(
+            &dir,
+            &SherpaStreamingConfig::Transducer(SherpaConfig {
+                num_threads: 0,
+                hotwords: vec!["Kubernetes".to_string()],
+            }),
+        )
+        .expect("present files must produce a config without invoking ONNX Runtime");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(built.family, StreamingModelFamily::Transducer);
+        assert_eq!(built.hotwords.as_deref(), Some("Kubernetes"));
+        assert_eq!(
+            built.recognizer.decoding_method.as_deref(),
+            Some("modified_beam_search")
+        );
+        assert_eq!(built.recognizer.max_active_paths, MAX_ACTIVE_PATHS);
+        assert_eq!(built.recognizer.hotwords_score, HOTWORDS_SCORE);
+        assert_eq!(built.recognizer.model_config.num_threads, 1);
+        assert_eq!(
+            built.recognizer.model_config.transducer.encoder,
+            Some(dir.join("encoder.onnx").display().to_string())
+        );
+        assert!(built.recognizer.model_config.t_one_ctc.model.is_none());
+    }
+
+    #[test]
+    fn streaming_t_one_config_is_ctc_greedy_and_has_no_hotwords() {
+        let dir = std::env::temp_dir().join("utter-stt-test-sherpa-t-one-config");
+        std::fs::create_dir_all(&dir).expect("failed to create test model dir");
+        for name in STREAMING_T_ONE_CTC_MODEL_FILES {
+            std::fs::write(dir.join(name), b"placeholder").expect("failed to write test file");
+        }
+
+        let built = build_streaming_recognizer_config(
+            &dir,
+            &SherpaStreamingConfig::TOneCtc { num_threads: 0 },
+        )
+        .expect("present files must produce a config without invoking ONNX Runtime");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(built.family, StreamingModelFamily::TOneCtc);
+        assert_eq!(built.hotwords, None);
+        assert_eq!(
+            built.recognizer.decoding_method.as_deref(),
+            Some("greedy_search")
+        );
+        assert_eq!(built.recognizer.max_active_paths, 0);
+        assert_eq!(built.recognizer.hotwords_score, 0.0);
+        assert_eq!(built.recognizer.model_config.num_threads, 1);
+        assert_eq!(
+            built.recognizer.model_config.t_one_ctc.model,
+            Some(dir.join("model.onnx").display().to_string())
+        );
+        assert!(built.recognizer.model_config.transducer.encoder.is_none());
+    }
+
+    #[test]
+    fn only_t_one_receives_model_boundary_padding() {
+        assert_eq!(stream_padding(StreamingModelFamily::Transducer), None);
+        assert_eq!(
+            stream_padding(StreamingModelFamily::TOneCtc),
+            Some(StreamPadding {
+                sample_rate: SAMPLE_RATE as i32,
+                leading_samples: 4_800,
+                trailing_samples: 9_600,
+            })
+        );
     }
 
     #[test]
