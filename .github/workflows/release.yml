@@ -6,18 +6,25 @@ permissions:
   contents: write
 jobs:
   release:
-    # Pinned, not `ubuntu-latest`. A binary links against the glibc of the
-    # machine that built it and will not start on anything older: built on
-    # 24.04 it demands GLIBC_2.39, so the published .deb died at exec time on
-    # Ubuntu 22.04 with `version 'GLIBC_2.39' not found`. Nothing catches
-    # that earlier -- the bundle's Depends names only the webkit/gtk
-    # libraries, so apt installs it happily. Building on the oldest release
-    # we support makes the floor glibc 2.35, which every newer distribution
-    # satisfies. Raise this only together with the minimum in the README.
-    runs-on: ubuntu-22.04
+    environment: release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Pinned, not `ubuntu-latest`. A binary links against the glibc of
+          # its build image, so this keeps the documented glibc 2.35 floor.
+          - platform: ubuntu-22.04
+            kind: linux
+          # GitHub's macos-15 label is an ARM64 runner. Pinning it avoids an
+          # unreviewed Xcode/macOS migration changing distributed binaries.
+          - platform: macos-15
+            kind: macos
+            rust_target: aarch64-apple-darwin
+    runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v7
       - name: install system dependencies
+        if: matrix.kind == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -25,6 +32,8 @@ jobs:
             libayatana-appindicator3-dev librsvg2-dev \
             pkg-config build-essential cmake
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target || '' }}
       # No rust-cache here, deliberately. Its key covers the job name and
       # `runner.os` ("Linux") but not the runner image, so moving this job
       # from `ubuntu-latest` to `ubuntu-22.04` restored a cache the 24.04
@@ -41,7 +50,19 @@ jobs:
       - name: install frontend dependencies
         working-directory: apps/desktop/ui
         run: npm ci
-      - uses: tauri-apps/tauri-action@v0
+      - name: require the tag to match the application version
+        shell: bash
+        run: |
+          APP_VERSION="$(node -p "require('./apps/desktop/src-tauri/tauri.conf.json').version")"
+          UI_VERSION="$(node -p "require('./apps/desktop/ui/package.json').version")"
+          CARGO_VERSION="$(cargo metadata --no-deps --format-version 1 | node -e "let s=''; process.stdin.on('data', c => s += c).on('end', () => console.log(JSON.parse(s).packages.find(p => p.name === 'utter-desktop').version))")"
+          if [[ "$GITHUB_REF_NAME" != "v$APP_VERSION" || "$APP_VERSION" != "$UI_VERSION" || "$APP_VERSION" != "$CARGO_VERSION" ]]; then
+            echo "Tag and application versions must match: tag=$GITHUB_REF_NAME tauri=$APP_VERSION ui=$UI_VERSION cargo=$CARGO_VERSION" >&2
+            exit 1
+          fi
+      - name: publish Linux bundles
+        if: matrix.kind == 'linux'
+        uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -50,3 +71,75 @@ jobs:
           releaseName: "Utter ${{ github.ref_name }}"
           releaseDraft: true
           args: --bundles deb,appimage --features sherpa
+      - name: require macOS signing and notarization secrets
+        if: matrix.kind == 'macos'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          missing=()
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [[ -z "${!name:-}" ]]; then missing+=("$name"); fi
+          done
+          if (( ${#missing[@]} )); then
+            echo "Missing required macOS release secrets: ${missing[*]}" >&2
+            exit 1
+          fi
+      - name: publish signed and notarized macOS bundle
+        if: matrix.kind == 'macos'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          projectPath: apps/desktop/src-tauri
+          tagName: ${{ github.ref_name }}
+          releaseName: "Utter ${{ github.ref_name }}"
+          releaseDraft: true
+          args: --target aarch64-apple-darwin --bundles dmg --features sherpa,whisper-metal
+      # Tauri notarizes and staples the .app before placing it in the DMG.
+      # Submit the signed disk image as well so its own offline Gatekeeper
+      # ticket is present; the first action upload is still an unpublished
+      # draft and is replaced only after all checks below succeed.
+      - name: notarize and staple the macOS disk image
+        if: matrix.kind == 'macos'
+        shell: bash
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          DMG_PATH="$(find target/aarch64-apple-darwin/release/bundle/dmg -maxdepth 1 -name '*.dmg' -type f -print -quit)"
+          [[ -n "$DMG_PATH" ]] || { echo "Built DMG was not found" >&2; exit 1; }
+          NOTARY_RESULT="$(xcrun notarytool submit "$DMG_PATH" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait --output-format json)"
+          printf '%s\n' "$NOTARY_RESULT"
+          NOTARY_STATUS="$(plutil -extract status raw -o - - <<< "$NOTARY_RESULT")"
+          [[ "$NOTARY_STATUS" == "Accepted" ]] || { echo "DMG notarization was not accepted" >&2; exit 1; }
+          xcrun stapler staple -v "$DMG_PATH"
+      - name: verify macOS release before publishing the draft
+        if: matrix.kind == 'macos'
+        shell: bash
+        run: |
+          APP_PATH="$(find target/aarch64-apple-darwin/release/bundle/macos -maxdepth 1 -name '*.app' -type d -print -quit)"
+          DMG_PATH="$(find target/aarch64-apple-darwin/release/bundle/dmg -maxdepth 1 -name '*.dmg' -type f -print -quit)"
+          ./scripts/verify-macos-release.sh "$APP_PATH" "$DMG_PATH" "${GITHUB_REF_NAME#v}"
+      - name: replace the draft asset with the verified disk image
+        if: matrix.kind == 'macos'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          DMG_PATH="$(find target/aarch64-apple-darwin/release/bundle/dmg -maxdepth 1 -name '*.dmg' -type f -print -quit)"
+          gh release upload "$GITHUB_REF_NAME" "$DMG_PATH" --clobber --repo "$GITHUB_REPOSITORY"
