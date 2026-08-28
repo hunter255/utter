@@ -103,6 +103,9 @@ pub(crate) fn persist_and_apply(
         .write()
         .map_err(|_| "settings lock poisoned".to_string())?;
 
+    let previous_autostart = guard.general.autostart;
+    let desired_autostart = settings.general.autostart;
+
     utter_store::save(&utter_store::config_path(), &settings)
         .map_err(|e| format!("failed to save settings: {e}"))?;
 
@@ -116,6 +119,18 @@ pub(crate) fn persist_and_apply(
     crate::runtime_boot::rebuild(app, state, &settings)?;
 
     *guard = settings;
+
+    // Persist and apply every ordinary setting even when the OS refuses the
+    // Login Item change. The warning is emitted while the settings window is
+    // listening, and the rejected command prevents the frontend from
+    // mistaking the platform integration for a successful toggle.
+    if crate::autostart::preference_changed(previous_autostart, desired_autostart) {
+        if let Err(error) = crate::autostart::reconcile(app, desired_autostart) {
+            let notice = crate::autostart::failure_notice(&error);
+            crate::sink::notify_warning(app, &notice);
+            return Err(notice);
+        }
+    }
 
     Ok(())
 }

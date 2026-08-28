@@ -71,7 +71,9 @@ endpoint, a model download).
 - **Tray and settings UI** — a quick refinement on/off toggle, a full
   settings window (profiles, engines, refinement, dictionary, snippets,
   history), and a first-run onboarding flow that walks through mic check,
-  model download, hotkey choice, and permissions.
+  model download, hotkey choice, and permissions. The General page's Launch
+  at login switch manages the operating system's startup registration and is
+  reconciled with the saved preference on every app start.
 
 ## Screenshots
 

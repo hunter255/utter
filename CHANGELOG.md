@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   overwriting data already created under the new identity.
 - Onboarding and Advanced settings show exact TCC reset commands and open the
   matching Privacy & Security pane when a macOS permission is denied.
+- The existing Launch at login switch now creates or removes an operating
+  system startup registration through Tauri's official autostart plugin. The
+  saved preference is reconciled at startup, and failures remain visible
+  without discarding unrelated settings changes.
 
 ## [0.3.1] - 2026-08-20
 
