@@ -141,10 +141,12 @@ default choice.
 
 ## Install
 
-Prebuilt `.deb` and AppImage packages are on the
-[Releases](https://github.com/eluceon/utter/releases) page. They bundle the
-sherpa-onnx engine, so the offline models the default profile uses work
-without any extra setup.
+Prebuilt packages are on the
+[Releases](https://github.com/hunter255/utter/releases) page. Linux releases
+provide `.deb` and AppImage packages. macOS releases provide a signed and
+notarized DMG for Apple Silicon (macOS 13 or newer) with Whisper Metal enabled.
+They bundle the sherpa-onnx engine, so the offline models the default profile
+uses work without any extra setup.
 
 They are built on Ubuntu 22.04 and need **glibc 2.35 or newer** — Ubuntu
 22.04+, Debian 12+, Fedora 37+. On anything older, build from source.

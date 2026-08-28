@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Apple Silicon releases are emitted as a Developer ID-signed, notarized and
+  stapled DMG, with explicit identity, architecture, minimum-system and
+  Gatekeeper verification before a draft release can be published.
 - Model catalog entries now describe final/preview role, supported languages,
   relative runtime cost, and recommendation tags. Onboarding exposes language
   selection alongside every final local model, while onboarding and profile

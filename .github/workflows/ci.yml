@@ -25,7 +25,7 @@ jobs:
           cache-dependency-path: apps/desktop/ui/package-lock.json
       - run: cargo fmt --check
       - name: Validate macOS development build helper
-        run: bash -n scripts/build-macos-dev.sh
+        run: bash -n scripts/build-macos-dev.sh scripts/verify-macos-release.sh
       # Default feature set (whisper.cpp + cloud STT) is the baseline gate.
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
