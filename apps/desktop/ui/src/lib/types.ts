@@ -273,6 +273,9 @@ export type PermissionReport =
       platform: 'macos'
       microphone: PermissionStatus
       text_injection: PermissionStatus
+      bundle_id: string
+      microphone_reset_command: string
+      text_injection_reset_command: string
     }
   | {
       platform: 'unsupported'

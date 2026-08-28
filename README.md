@@ -195,6 +195,17 @@ the new directory is never overwritten. API keys are copied from the old
 `utter` Keychain service when first read. macOS privacy grants cannot be moved,
 so the new identity asks once on its first launch.
 
+If its permission entry is missing or stale, quit Utter, run the matching
+command, relaunch, and grant access again:
+
+```sh
+/usr/bin/tccutil reset Microphone io.github.hunter255.utter
+/usr/bin/tccutil reset Accessibility io.github.hunter255.utter
+```
+
+The same commands and shortcuts to the matching System Settings panes are
+available in onboarding and Settings > Advanced.
+
 The `sherpa` engine links sherpa-onnx statically; its build script downloads
 a prebuilt native archive on first build, so building with `--features
 sherpa` (`cargo tauri dev --features sherpa` /

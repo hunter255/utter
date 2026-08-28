@@ -82,6 +82,10 @@ export function requestPermission(kind: PermissionKind): Promise<PermissionRepor
   return invoke('request_permission', { kind })
 }
 
+export function openPermissionSettings(kind: PermissionKind): Promise<void> {
+  return invoke('open_permission_settings', { kind })
+}
+
 export function platformCapabilities(): Promise<PlatformCapabilities> {
   return invoke('platform_capabilities')
 }

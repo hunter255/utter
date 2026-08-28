@@ -47,6 +47,9 @@ pub(crate) enum PermissionReport {
     Macos {
         microphone: PermissionStatus,
         text_injection: PermissionStatus,
+        bundle_id: String,
+        microphone_reset_command: String,
+        text_injection_reset_command: String,
     },
     #[cfg(any(not(any(target_os = "linux", target_os = "macos")), test))]
     Unsupported { os: String },
@@ -59,10 +62,10 @@ pub(crate) fn report() -> PermissionReport {
 
 #[cfg(target_os = "macos")]
 pub(crate) fn report() -> PermissionReport {
-    PermissionReport::Macos {
-        microphone: microphone_status(utter_audio::microphone_permission()),
-        text_injection: text_injection_status(utter_inject::text_injection_permission()),
-    }
+    macos_report(
+        microphone_status(utter_audio::microphone_permission()),
+        text_injection_status(utter_inject::text_injection_permission()),
+    )
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -88,6 +91,56 @@ pub(crate) fn request(kind: PermissionKind) -> PermissionReport {
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn request(_kind: PermissionKind) -> PermissionReport {
     report()
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn macos_report(
+    microphone: PermissionStatus,
+    text_injection: PermissionStatus,
+) -> PermissionReport {
+    PermissionReport::Macos {
+        microphone,
+        text_injection,
+        bundle_id: utter_store::APP_IDENTIFIER.to_string(),
+        microphone_reset_command: format!(
+            "/usr/bin/tccutil reset Microphone {}",
+            utter_store::APP_IDENTIFIER
+        ),
+        text_injection_reset_command: format!(
+            "/usr/bin/tccutil reset Accessibility {}",
+            utter_store::APP_IDENTIFIER
+        ),
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn settings_url(kind: PermissionKind) -> &'static str {
+    match kind {
+        PermissionKind::Microphone => {
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+        }
+        PermissionKind::TextInjection => {
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn open_settings(kind: PermissionKind) -> Result<(), String> {
+    let status = std::process::Command::new("/usr/bin/open")
+        .arg(settings_url(kind))
+        .status()
+        .map_err(|error| format!("failed to open System Settings: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("System Settings exited with status {status}"))
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn open_settings(_kind: PermissionKind) -> Result<(), String> {
+    Err("privacy settings can only be opened on macOS".to_string())
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -152,15 +205,27 @@ mod tests {
 
     #[test]
     fn macos_report_serializes_both_permission_statuses() {
-        let report = PermissionReport::Macos {
-            microphone: PermissionStatus::Granted,
-            text_injection: PermissionStatus::Denied,
-        };
+        let report = macos_report(PermissionStatus::Granted, PermissionStatus::Denied);
         let json = serde_json::to_value(report).unwrap();
 
         assert_eq!(json["platform"], "macos");
         assert_eq!(json["microphone"], "granted");
         assert_eq!(json["text_injection"], "denied");
+        assert_eq!(json["bundle_id"], utter_store::APP_IDENTIFIER);
+        assert_eq!(
+            json["microphone_reset_command"],
+            format!(
+                "/usr/bin/tccutil reset Microphone {}",
+                utter_store::APP_IDENTIFIER
+            )
+        );
+        assert_eq!(
+            json["text_injection_reset_command"],
+            format!(
+                "/usr/bin/tccutil reset Accessibility {}",
+                utter_store::APP_IDENTIFIER
+            )
+        );
     }
 
     #[test]
@@ -181,5 +246,11 @@ mod tests {
             PermissionKind::parse("camera").unwrap_err(),
             "unknown permission kind 'camera': expected 'microphone' or 'text_injection'"
         );
+    }
+
+    #[test]
+    fn each_macos_permission_opens_its_matching_privacy_pane() {
+        assert!(settings_url(PermissionKind::Microphone).contains("Privacy_Microphone"));
+        assert!(settings_url(PermissionKind::TextInjection).contains("Privacy_Accessibility"));
     }
 }

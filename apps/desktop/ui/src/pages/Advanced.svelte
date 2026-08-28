@@ -3,6 +3,7 @@
 
   import Section from '../lib/components/Section.svelte'
   import Field from '../lib/components/Field.svelte'
+  import MacosPermissionRecovery from '../lib/components/MacosPermissionRecovery.svelte'
   import Select from '../lib/components/Select.svelte'
   import Slider from '../lib/components/Slider.svelte'
   import * as api from '../lib/api'
@@ -42,6 +43,7 @@
   let devices = $state<string[]>([])
   let devicesError = $state('')
   let microphonePermission = $state<PermissionStatus | null>(null)
+  let microphoneResetCommand = $state('')
   let permissionBusy = $state(false)
   let permissionError = $state('')
 
@@ -49,7 +51,10 @@
     if (capabilities.os !== 'macos') return
     try {
       const report = await api.permissionsReport()
-      if (report.platform === 'macos') microphonePermission = report.microphone
+      if (report.platform === 'macos') {
+        microphonePermission = report.microphone
+        microphoneResetCommand = report.microphone_reset_command
+      }
       permissionError = ''
     } catch (err) {
       permissionError = String(err)
@@ -61,7 +66,10 @@
     permissionError = ''
     try {
       const report = await api.requestPermission('microphone')
-      if (report.platform === 'macos') microphonePermission = report.microphone
+      if (report.platform === 'macos') {
+        microphonePermission = report.microphone
+        microphoneResetCommand = report.microphone_reset_command
+      }
     } catch (err) {
       permissionError = String(err)
     } finally {
@@ -137,6 +145,17 @@
           <p class="warning">
             Enable Utter in System Settings → Privacy & Security → Microphone, then check again.
           </p>
+          {#if microphoneResetCommand}
+            <MacosPermissionRecovery
+              kind="microphone"
+              command={microphoneResetCommand}
+              onError={(message) => (permissionError = message)}
+            />
+            <p class="muted">
+              Use reset only for a missing or stale entry: copy it, quit Utter, run it in
+              Terminal, then reopen Utter and allow access again.
+            </p>
+          {/if}
           <button type="button" onclick={refreshMicrophonePermission}>Check again</button>
         {/if}
       {/if}
@@ -191,4 +210,5 @@
   .ok {
     color: var(--success);
   }
+
 </style>

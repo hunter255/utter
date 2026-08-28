@@ -3,6 +3,7 @@
   import { getCurrentWindow } from '@tauri-apps/api/window'
 
   import HotkeyPicker from '../lib/components/HotkeyPicker.svelte'
+  import MacosPermissionRecovery from '../lib/components/MacosPermissionRecovery.svelte'
   import Select from '../lib/components/Select.svelte'
   import * as api from '../lib/api'
   import { hasBaseKey, parseChordTokens } from '../lib/hotkey'
@@ -245,6 +246,15 @@
             Microphone access is off. Enable Utter in System Settings → Privacy & Security →
             Microphone, then return here.
           </p>
+          <MacosPermissionRecovery
+            kind="microphone"
+            command={permissions.microphone_reset_command}
+            onError={(message) => (permissionsError = message)}
+          />
+          <p class="muted">
+            If Utter is missing or the status is stale, copy the command, quit Utter, run it in
+            Terminal, then reopen the app and allow access again.
+          </p>
         {:else}
           <p class="warn">Microphone permission is unavailable on this Mac.</p>
         {/if}
@@ -417,6 +427,26 @@
               Enable the denied access in System Settings → Privacy & Security, then return to
               Utter and check again. Dictation needs Microphone; automatic paste needs
               Accessibility.
+            </p>
+            {#if permissions.microphone === 'denied'}
+              <strong class="recovery-label">Microphone recovery</strong>
+              <MacosPermissionRecovery
+                kind="microphone"
+                command={permissions.microphone_reset_command}
+                onError={(message) => (permissionsError = message)}
+              />
+            {/if}
+            {#if permissions.text_injection === 'denied'}
+              <strong class="recovery-label">Accessibility recovery</strong>
+              <MacosPermissionRecovery
+                kind="text_injection"
+                command={permissions.text_injection_reset_command}
+                onError={(message) => (permissionsError = message)}
+              />
+            {/if}
+            <p class="muted">
+              Use reset only if the System Settings entry is missing or stale: copy the command,
+              quit Utter, run it in Terminal, then reopen Utter and allow access again.
             </p>
             <button type="button" onclick={checkPermissions}>Check again</button>
           {:else if permissions.microphone === 'granted' && permissions.text_injection === 'granted'}
@@ -621,6 +651,10 @@
     overflow-x: auto;
     white-space: pre-wrap;
     word-break: break-word;
+  }
+
+  .recovery-label {
+    font-size: 13px;
   }
 
   .actions {

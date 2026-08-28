@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `io.github.hunter255.utter`. Existing settings, history, downloaded models,
   and API keys migrate from the temporary development identities without
   overwriting data already created under the new identity.
+- Onboarding and Advanced settings show exact TCC reset commands and open the
+  matching Privacy & Security pane when a macOS permission is denied.
 
 ## [0.3.1] - 2026-08-20
 

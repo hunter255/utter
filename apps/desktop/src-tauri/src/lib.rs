@@ -163,6 +163,7 @@ pub fn run() -> Result<(), String> {
             commands::has_api_key,
             commands::permissions_report,
             commands::request_permission,
+            commands::open_permission_settings,
             commands::platform_capabilities,
             commands::test_refine,
             commands::cancel_dictation,
