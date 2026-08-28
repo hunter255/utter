@@ -29,6 +29,7 @@ mod sink;
 mod state;
 /// System tray icon and menu.
 mod tray;
+mod updater;
 
 use tauri::{Manager, RunEvent, WindowEvent};
 use tracing::level_filters::LevelFilter;
@@ -112,6 +113,21 @@ pub fn run() -> Result<(), String> {
         );
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(macos_hotkeys::plugin());
+    #[cfg(feature = "updater")]
+    let builder = {
+        let public_key = option_env!("UTTER_UPDATER_PUBLIC_KEY")
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                "updater build is missing the embedded UTTER_UPDATER_PUBLIC_KEY".to_string()
+            })?;
+        builder
+            .plugin(
+                tauri_plugin_updater::Builder::new()
+                    .pubkey(public_key)
+                    .build(),
+            )
+            .manage(updater::UpdaterState::default())
+    };
 
     let app = builder
         .setup(|app| {
@@ -198,6 +214,8 @@ pub fn run() -> Result<(), String> {
             commands::open_permission_settings,
             commands::open_logs,
             commands::copy_diagnostics,
+            commands::check_for_update,
+            commands::install_update,
             commands::platform_capabilities,
             commands::test_refine,
             commands::cancel_dictation,
@@ -253,6 +271,18 @@ mod tests {
 
         assert_eq!(config["identifier"], utter_store::APP_IDENTIFIER);
         assert_eq!(KEYRING_SERVICE, utter_store::APP_IDENTIFIER);
+    }
+
+    #[test]
+    fn release_override_creates_v2_updater_artifacts_without_changing_base_builds() {
+        let base: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("valid base config");
+        let release: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.updater.conf.json"))
+                .expect("valid updater config");
+
+        assert!(base["bundle"].get("createUpdaterArtifacts").is_none());
+        assert_eq!(release["bundle"]["createUpdaterArtifacts"], true);
     }
 
     /// Every command the settings UI invokes is registered in the
