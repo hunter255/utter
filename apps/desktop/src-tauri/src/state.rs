@@ -6,7 +6,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::{Context, Result};
-use directories::ProjectDirs;
 
 use utter_store::{HistoryRepo, ModelManager, Settings};
 
@@ -88,12 +87,9 @@ pub struct AppState {
     /// the next successful `save_settings` spins one up (see
     /// `runtime_boot::rebuild`).
     pub session_ctl: Mutex<Option<RuntimeHandle>>,
-    /// Set when settings could not be loaded because a v0.1 config failed to
-    /// migrate (see `utter_store::MigrationFailed`): the app boots with
-    /// `Settings::default()` for this run and `runtime_boot::boot` queues
-    /// this as a user-facing notice once the runtime is up. `None` on every
-    /// other startup, including a normal migration.
-    pub startup_notice: Option<String>,
+    /// User-facing warnings discovered before the window and runtime exist,
+    /// including storage-identity and settings-schema migration failures.
+    pub startup_notices: Vec<String>,
     /// Live mirror of `settings.dictation.hud`, shared with every
     /// `TauriEventSink` (see `crate::sink`). A plain `RwLock<Settings>` read
     /// isn't enough on its own: the sink used by an already-running
@@ -111,7 +107,7 @@ pub struct AppState {
     /// it, kept until the settings window asks (see [`PendingNotices`] and
     /// the `take_pending_notices` command).
     ///
-    /// Distinct from `startup_notice` above, which is a *message* travelling
+    /// Distinct from `startup_notices` above, which are messages travelling
     /// from `AppState::new` (which has no `AppHandle`, so cannot report
     /// anything) to `boot`, the one place notices are reported. This is
     /// reported notices travelling from `boot` onward to the frontend. Boot
@@ -135,17 +131,21 @@ impl AppState {
     /// A config that fails to migrate degrades rather than aborting startup:
     /// the original file is left exactly as `utter_store::load` left it (see
     /// its doc comment), this run boots with `Settings::default()`, and
-    /// `startup_notice` carries a message for `runtime_boot::boot` to queue.
+    /// `startup_notices` carries a message for `runtime_boot::boot` to queue.
     /// Any other load failure (unreadable file, genuinely malformed TOML
     /// unrelated to migration) still aborts startup, as it did before.
     pub fn new() -> Result<Self> {
+        let storage_migration = utter_store::migrate_legacy_storage();
+        let mut startup_notices = storage_migration.warnings;
+
         let config_path = utter_store::config_path();
-        let (settings, startup_notice) = match utter_store::load(&config_path) {
-            Ok(settings) => (settings, None),
+        let settings = match utter_store::load(&config_path) {
+            Ok(settings) => settings,
             Err(err) => match err.downcast_ref::<utter_store::MigrationFailed>() {
                 Some(failed) => {
                     tracing::warn!("{err:#}");
-                    (Settings::default(), Some(migration_notice(failed)))
+                    startup_notices.push(migration_notice(failed));
+                    Settings::default()
                 }
                 None => return Err(err).context("failed to load settings"),
             },
@@ -161,7 +161,7 @@ impl AppState {
             models,
             history: Mutex::new(history),
             session_ctl: Mutex::new(None),
-            startup_notice,
+            startup_notices,
             hud_enabled,
             notice_throttle: Arc::new(NoticeThrottle::default()),
             pending_notices: PendingNotices::default(),
@@ -193,13 +193,10 @@ fn migration_notice(failed: &utter_store::MigrationFailed) -> String {
     }
 }
 
-/// The per-user data directory for the app, under the `dev.utter.utter`
-/// application identifier (matching [`utter_store::config_path`]'s
-/// identifier triple).
+/// The per-user data directory for the app, under its final application
+/// identifier (matching [`utter_store::config_path`]).
 fn data_dir() -> Result<PathBuf> {
-    ProjectDirs::from("dev", "utter", "utter")
-        .map(|dirs| dirs.data_dir().to_path_buf())
-        .context("failed to resolve the platform data directory")
+    utter_store::data_dir()
 }
 
 /// The history database's on-disk path. Shared by [`AppState::new`] (which

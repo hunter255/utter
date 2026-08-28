@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- The permanent macOS bundle and Keychain identity is
+  `io.github.hunter255.utter`. Existing settings, history, downloaded models,
+  and API keys migrate from the temporary development identities without
+  overwriting data already created under the new identity.
+
 ## [0.3.1] - 2026-08-20
 
 ### Fixed

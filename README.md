@@ -185,6 +185,16 @@ Raw `cargo tauri dev` executables are rebuilt in place without an application
 bundle signature, so macOS may treat each changed binary as a new privacy
 client. Use the helper above when testing the microphone or text injection.
 
+The permanent bundle and Keychain service identifier is
+`io.github.hunter255.utter`. Builds made before that identity used
+`dev.utter.app` for macOS privacy grants and `dev.utter.utter` for storage.
+On first launch, Utter copies settings and history and moves downloaded models
+from `~/Library/Application Support/dev.utter.utter` to
+`~/Library/Application Support/io.github.hunter255.utter`; an existing file in
+the new directory is never overwritten. API keys are copied from the old
+`utter` Keychain service when first read. macOS privacy grants cannot be moved,
+so the new identity asks once on its first launch.
+
 The `sherpa` engine links sherpa-onnx statically; its build script downloads
 a prebuilt native archive on first build, so building with `--features
 sherpa` (`cargo tauri dev --features sherpa` /

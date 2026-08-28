@@ -4,7 +4,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use directories::ProjectDirs;
 use serde::de::IntoDeserializer;
 use serde::{Deserialize, Serialize};
 
@@ -319,14 +318,6 @@ pub enum InjectionPreference {
     ClipboardPaste,
     Type,
     ClipboardOnly,
-}
-
-/// The default per-user config file path: `<config_dir>/config.toml` under
-/// the `dev.utter.utter` application identifier.
-pub fn config_path() -> PathBuf {
-    ProjectDirs::from("dev", "utter", "utter")
-        .map(|dirs| dirs.config_dir().join("config.toml"))
-        .unwrap_or_else(|| PathBuf::from("config.toml"))
 }
 
 /// Load settings from `path`. A missing file yields `Settings::default()`;

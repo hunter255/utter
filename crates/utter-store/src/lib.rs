@@ -2,6 +2,7 @@
 
 pub mod error;
 pub mod history;
+pub mod identity;
 pub mod migrate;
 pub mod models;
 pub mod profile;
@@ -9,7 +10,11 @@ pub mod settings;
 
 pub use error::{IntegrityError, MigrateError, MigrationFailed};
 pub use history::{HistoryEntry, HistoryRepo, NewEntry};
+pub use identity::{
+    config_path, data_dir, migrate_legacy_storage, StorageMigrationReport, APP_IDENTIFIER,
+    LEGACY_STORAGE_IDENTIFIER,
+};
 pub use migrate::migrate_v1;
 pub use models::{ModelInfo, ModelManager};
 pub use profile::{DraftCfg, LanguageProfile, RecognitionCfg, RecognitionPromptMode, RefinePolicy};
-pub use settings::{config_path, load, save, Settings};
+pub use settings::{load, save, Settings};
