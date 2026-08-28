@@ -5616,6 +5616,7 @@ dependencies = [
  "crossbeam-channel",
  "gtk",
  "keyring",
+ "regex",
  "serde",
  "serde_json",
  "tauri",

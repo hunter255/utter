@@ -257,3 +257,8 @@ partial and has no state for one.
   and is reported as such: it costs no word of anyone's transcript, so it
   degrades to a dark preview and an `info` notice rather than the `warning`
   a broken final engine earns.
+- **Persistent logs are bounded and redacted** — the desktop shell writes
+  `tracing` events through a redacting writer into four rotating local files
+  rather than depending on an invisible GUI stderr stream. Credential-like
+  fields, URL queries and the user's home prefix are removed before disk I/O;
+  failure to create the directory falls back to stderr without aborting boot.
