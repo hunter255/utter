@@ -24,18 +24,19 @@ use crate::uinput_kbd::VirtualKeyboard;
 /// whatever was previously on the clipboard (or nothing at all).
 const CLIPBOARD_SET_TO_PASTE_DELAY: Duration = Duration::from_millis(80);
 
-/// How long to wait after synthesizing the paste chord before restoring the user's
-/// previous clipboard contents. The target application reads the clipboard
-/// asynchronously in response to the paste keystroke, so restoring too soon
-/// would race it and paste our own restored (old) value instead.
+/// Fixed-delay fallback after synthesizing the paste chord. macOS normally
+/// restores from an actual promised-data read receipt; Linux and any failed
+/// macOS promise setup retain this bounded delay because their clipboard APIs
+/// do not expose an equivalent receipt.
 const CLIPBOARD_RESTORE_DELAY: Duration = Duration::from_millis(150);
 
 /// Injects text by publishing it to the clipboard and synthesizing a paste.
 ///
 /// On Linux the text goes to both CLIPBOARD and PRIMARY because Shift+Insert
 /// reads different selections in different toolkits. macOS has one clipboard
-/// and uses Command+V. Previous text contents are restored afterward on a
-/// best-effort basis: a failed restore is logged (see
+/// and uses Command+V. On macOS restoration waits for an actual pasteboard
+/// read and is skipped if a newer copy changed ownership. Previous contents
+/// are restored on a best-effort basis: a failed restore is logged (see
 /// [`crate::clipboard::Selections::restore`]) but never turns a successful injection into
 /// an error.
 pub struct ClipboardPasteInjector {
@@ -57,7 +58,7 @@ impl ClipboardPasteInjector {
 impl TextInjector for ClipboardPasteInjector {
     fn inject(&mut self, text: &str) -> Result<InjectionMethod, InjectError> {
         let previous = self.selections.save();
-        self.selections.set_text(text)?;
+        let mut publication = self.selections.set_paste_text(text)?;
         std::thread::sleep(CLIPBOARD_SET_TO_PASTE_DELAY);
 
         // Push-to-talk releases the hotkey right before this runs; wait
@@ -66,9 +67,14 @@ impl TextInjector for ClipboardPasteInjector {
         // combination (see `crate::modifier_wait`).
         modifier_wait::wait_for_modifiers_released();
 
+        publication.arm();
         let paste_result = self.paste_key.paste();
-        std::thread::sleep(CLIPBOARD_RESTORE_DELAY);
-        self.selections.restore(previous);
+        self.selections.complete_paste(
+            previous,
+            publication,
+            paste_result.is_ok(),
+            CLIPBOARD_RESTORE_DELAY,
+        );
 
         paste_result?;
         Ok(InjectionMethod::ClipboardPaste)

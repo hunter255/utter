@@ -15,6 +15,10 @@ pub mod inject;
 pub use inject::{ClipboardOnlyInjector, ClipboardPasteInjector, TypeInjector};
 
 mod clipboard;
+#[cfg(target_os = "macos")]
+mod clipboard_macos;
+#[cfg(target_os = "macos")]
+mod clipboard_receipt;
 mod modifier_wait;
 mod paste_key;
 pub use paste_key::{

@@ -35,6 +35,12 @@ mod platform {
     /// them back.
     pub(crate) struct SavedSelections([(LinuxClipboardKind, Option<String>); 2]);
 
+    pub(crate) struct PastePublication;
+
+    impl PastePublication {
+        pub(crate) fn arm(&mut self) {}
+    }
+
     /// One clipboard connection, reused for every read and write.
     ///
     /// The connection is what makes a published selection readable: X11 has
@@ -110,6 +116,14 @@ mod platform {
             Ok(())
         }
 
+        pub(crate) fn set_paste_text(
+            &mut self,
+            text: &str,
+        ) -> Result<PastePublication, InjectError> {
+            self.set_text(text)?;
+            Ok(PastePublication)
+        }
+
         fn set_one(&mut self, kind: LinuxClipboardKind, text: &str) -> Result<(), String> {
             let result = self
                 .connection()?
@@ -138,6 +152,19 @@ mod platform {
                     tracing::warn!("utter-inject: failed to restore {kind:?} after paste: {err}");
                 }
             }
+        }
+
+        pub(crate) fn complete_paste(
+            &mut self,
+            previous: SavedSelections,
+            _publication: PastePublication,
+            paste_succeeded: bool,
+            fallback_delay: std::time::Duration,
+        ) {
+            if paste_succeeded {
+                std::thread::sleep(fallback_delay);
+            }
+            self.restore(previous);
         }
     }
 }
@@ -192,6 +219,18 @@ mod platform {
     /// nothing to choose between.
     pub(crate) struct SavedSelections(SavedClipboard);
 
+    pub(crate) struct PastePublication {
+        #[cfg(target_os = "macos")]
+        inner: crate::clipboard_macos::PastePublication,
+    }
+
+    impl PastePublication {
+        pub(crate) fn arm(&mut self) {
+            #[cfg(target_os = "macos")]
+            self.inner.arm();
+        }
+    }
+
     /// One clipboard connection, reused for every read and write. See the
     /// Linux implementation for why the connection is kept rather than
     /// opened per call; here it is simply the cheaper of the two.
@@ -239,6 +278,32 @@ mod platform {
         pub(crate) fn set_text(&mut self, text: &str) -> Result<(), InjectError> {
             self.set_one(text)
                 .map_err(|e| InjectError::Backend(format!("clipboard unavailable: {e}")))
+        }
+
+        pub(crate) fn set_paste_text(
+            &mut self,
+            text: &str,
+        ) -> Result<PastePublication, InjectError> {
+            #[cfg(target_os = "macos")]
+            {
+                let inner = match crate::clipboard_macos::PastePublication::publish(text) {
+                    Ok(publication) => publication,
+                    Err(err) => {
+                        tracing::warn!(
+                            "utter-inject: promised clipboard publication failed; using fixed-delay fallback: {err}"
+                        );
+                        self.set_text(text)?;
+                        crate::clipboard_macos::PastePublication::fallback()
+                    }
+                };
+                Ok(PastePublication { inner })
+            }
+
+            #[cfg(not(target_os = "macos"))]
+            {
+                self.set_text(text)?;
+                Ok(PastePublication {})
+            }
         }
 
         fn set_one(&mut self, text: &str) -> Result<(), String> {
@@ -291,6 +356,59 @@ mod platform {
                 tracing::warn!(
                     "utter-inject: failed to restore {label} clipboard contents after paste: {err}"
                 );
+            }
+        }
+
+        pub(crate) fn complete_paste(
+            &mut self,
+            previous: SavedSelections,
+            publication: PastePublication,
+            paste_succeeded: bool,
+            fallback_delay: std::time::Duration,
+        ) {
+            #[cfg(target_os = "macos")]
+            {
+                use crate::clipboard_macos::ReadWaitOutcome;
+
+                if paste_succeeded {
+                    if publication.inner.has_receipt_provider() {
+                        match publication.inner.wait_for_read() {
+                            ReadWaitOutcome::Read => {}
+                            ReadWaitOutcome::OwnershipLost => {
+                                tracing::debug!(
+                                    "utter-inject: clipboard changed during paste; preserving the newer contents"
+                                );
+                                return;
+                            }
+                            ReadWaitOutcome::TimedOut => {
+                                tracing::warn!(
+                                    "utter-inject: paste target did not read the promised clipboard text before timeout; leaving the transcript on the clipboard"
+                                );
+                                publication.inner.materialize_after_timeout();
+                                return;
+                            }
+                        }
+                    } else {
+                        std::thread::sleep(fallback_delay);
+                    }
+                }
+
+                if !publication.inner.still_owns_clipboard() {
+                    tracing::debug!(
+                        "utter-inject: clipboard changed before restore; preserving the newer contents"
+                    );
+                    return;
+                }
+                self.restore(previous);
+            }
+
+            #[cfg(not(target_os = "macos"))]
+            {
+                let _ = publication;
+                if paste_succeeded {
+                    std::thread::sleep(fallback_delay);
+                }
+                self.restore(previous);
             }
         }
     }
