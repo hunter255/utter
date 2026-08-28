@@ -30,6 +30,7 @@
         "transparent": true,
         "decorations": false,
         "alwaysOnTop": true,
+        "visibleOnAllWorkspaces": true,
         "skipTaskbar": true,
         "visible": false,
         "shadow": false,

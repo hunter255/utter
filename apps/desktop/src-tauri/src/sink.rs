@@ -238,6 +238,19 @@ impl TauriEventSink {
             if already_visible {
                 Ok(())
             } else {
+                // Position once per dictation, before showing. Audio-level
+                // events reuse the visible window, so Accessibility and
+                // monitor queries never run at the frame rate.
+                #[cfg(target_os = "macos")]
+                if let Err(e) = crate::hud_position::position_hud(&self.app, &hud) {
+                    tracing::warn!("failed to position hud window: {e}");
+                }
+
+                // Re-assert this before show as well as after it. On macOS a
+                // non-key panel leaves the target editor and caret focused.
+                if let Err(e) = hud.set_focusable(false) {
+                    tracing::warn!("failed to prepare non-focusable hud window: {e}");
+                }
                 hud.show()
             }
         } else {
