@@ -105,6 +105,85 @@ async fn language_option_is_forwarded_and_echoed_back() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn recognition_prompt_is_forwarded_when_nonblank() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/audio/transcriptions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "text": "PostgreSQL"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let cfg = config(server.uri());
+    let opts = TranscribeOptions {
+        initial_prompt: Some("  Keep PostgreSQL spelling.  ".to_string()),
+        ..TranscribeOptions::default()
+    };
+    let samples = sample_audio();
+
+    tokio::task::spawn_blocking(move || {
+        let mut engine = CloudEngine::new(cfg);
+        engine.begin(&opts).expect("begin failed");
+        engine.feed(&samples).expect("feed failed");
+        engine.finish().expect("finish failed");
+    })
+    .await
+    .expect("blocking task panicked");
+
+    let requests = server.received_requests().await.unwrap();
+    let body = String::from_utf8_lossy(&requests[0].body);
+    assert!(
+        body.contains("name=\"prompt\""),
+        "missing prompt field: {body}"
+    );
+    assert!(
+        body.contains("Keep PostgreSQL spelling."),
+        "missing prompt value: {body}"
+    );
+    assert!(!body.contains("  Keep PostgreSQL spelling.  "));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn blank_recognition_prompt_is_not_sent() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/audio/transcriptions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "text": "hello"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let cfg = config(server.uri());
+    let opts = TranscribeOptions {
+        initial_prompt: Some("   \n  ".to_string()),
+        ..TranscribeOptions::default()
+    };
+    let samples = sample_audio();
+
+    tokio::task::spawn_blocking(move || {
+        let mut engine = CloudEngine::new(cfg);
+        engine.begin(&opts).expect("begin failed");
+        engine.feed(&samples).expect("feed failed");
+        engine.finish().expect("finish failed");
+    })
+    .await
+    .expect("blocking task panicked");
+
+    let requests = server.received_requests().await.unwrap();
+    let body = String::from_utf8_lossy(&requests[0].body);
+    assert!(
+        !body.contains("name=\"prompt\""),
+        "blank prompt was sent: {body}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn unauthorized_returns_engine_error_with_status() {
     let server = MockServer::start().await;
 

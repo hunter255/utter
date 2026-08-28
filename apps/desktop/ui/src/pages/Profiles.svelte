@@ -51,6 +51,12 @@
     { value: 'custom', label: 'Custom' },
   ]
 
+  const CLOUD_MODEL_PRESETS = [
+    { value: 'gpt-4o-mini-transcribe', label: 'GPT-4o mini' },
+    { value: 'gpt-4o-transcribe', label: 'GPT-4o' },
+    { value: 'whisper-1', label: 'Whisper 1' },
+  ]
+
   let models = $state<ModelInfo[]>([])
   let modelsError = $state('')
 
@@ -241,10 +247,60 @@
           }
         />
       </Field>
+    {:else if profile.engine.active === 'sherpa'}
+      <Field label="Sherpa model" for="profile-{index}-model">
+        <Select
+          id="profile-{index}-model"
+          options={sherpaOptions}
+          bind:value={
+            () => profile.engine.sherpa_model ?? '',
+            (v) => updateProfile(index, { engine: { sherpa_model: v === '' ? null : v } })
+          }
+        />
+      </Field>
+    {:else}
+      <Field label="Cloud base URL" for="profile-{index}-cloud-url">
+        <TextInput
+          id="profile-{index}-cloud-url"
+          type="url"
+          bind:value={
+            () => profile.engine.cloud.base_url,
+            (v) => updateProfile(index, { engine: { cloud: { base_url: v } } })
+          }
+        />
+      </Field>
+      <Field
+        label="Cloud model"
+        for="profile-{index}-cloud-model"
+        hint="Choose a preset or enter any model supported by your OpenAI-compatible endpoint."
+      >
+        <TextInput
+          id="profile-{index}-cloud-model"
+          bind:value={
+            () => profile.engine.cloud.model,
+            (v) => updateProfile(index, { engine: { cloud: { model: v } } })
+          }
+        />
+        <div class="model-presets" aria-label="Cloud model presets">
+          {#each CLOUD_MODEL_PRESETS as preset (preset.value)}
+            <button
+              type="button"
+              class:active={profile.engine.cloud.model === preset.value}
+              aria-pressed={profile.engine.cloud.model === preset.value}
+              onclick={() => updateProfile(index, { engine: { cloud: { model: preset.value } } })}
+            >{preset.label}</button>
+          {/each}
+        </div>
+      </Field>
+    {/if}
+
+    {#if profile.engine.active !== 'sherpa'}
       <Field
         label="Recognition prompt"
         for="profile-{index}-recognition-prompt-mode"
-        hint="Guides Whisper before recognition. Dictionary terms are added separately in every mode; this does not call the refinement LLM."
+        hint={profile.engine.active === 'cloud'
+          ? 'Sent to the transcription endpoint before recognition. Recommended sends dictionary terms only; Custom adds your guidance. This is separate from LLM refinement.'
+          : 'Guides Whisper before recognition. Dictionary terms are added in every mode; this does not call the refinement LLM.'}
       >
         <Select
           id="profile-{index}-recognition-prompt-mode"
@@ -274,37 +330,6 @@
           ></textarea>
         </Field>
       {/if}
-    {:else if profile.engine.active === 'sherpa'}
-      <Field label="Sherpa model" for="profile-{index}-model">
-        <Select
-          id="profile-{index}-model"
-          options={sherpaOptions}
-          bind:value={
-            () => profile.engine.sherpa_model ?? '',
-            (v) => updateProfile(index, { engine: { sherpa_model: v === '' ? null : v } })
-          }
-        />
-      </Field>
-    {:else}
-      <Field label="Cloud base URL" for="profile-{index}-cloud-url">
-        <TextInput
-          id="profile-{index}-cloud-url"
-          type="url"
-          bind:value={
-            () => profile.engine.cloud.base_url,
-            (v) => updateProfile(index, { engine: { cloud: { base_url: v } } })
-          }
-        />
-      </Field>
-      <Field label="Cloud model" for="profile-{index}-cloud-model">
-        <TextInput
-          id="profile-{index}-cloud-model"
-          bind:value={
-            () => profile.engine.cloud.model,
-            (v) => updateProfile(index, { engine: { cloud: { model: v } } })
-          }
-        />
-      </Field>
     {/if}
 
     <Field
@@ -385,6 +410,23 @@
 
   .profile-actions {
     display: flex;
+  }
+
+  .model-presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+  }
+
+  .model-presets button {
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+
+  .model-presets button.active {
+    color: var(--text);
+    border-color: var(--accent);
+    background: var(--bg-sunken);
   }
 
   button {
