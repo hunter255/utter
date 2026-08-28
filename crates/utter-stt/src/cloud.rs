@@ -218,6 +218,14 @@ fn transcribe(
     if let Some(language) = &opts.language {
         form = form.text("language", language.clone());
     }
+    if let Some(prompt) = opts
+        .initial_prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|prompt| !prompt.is_empty())
+    {
+        form = form.text("prompt", prompt.to_string());
+    }
 
     let base_url = config.base_url.trim_end_matches('/');
     let url = format!("{base_url}/audio/transcriptions");
