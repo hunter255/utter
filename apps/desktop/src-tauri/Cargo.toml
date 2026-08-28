@@ -15,7 +15,6 @@ tauri-build = { version = "2.6", features = [] }
 [dependencies]
 anyhow = { workspace = true }
 crossbeam-channel = { workspace = true }
-directories = "6"
 serde = { workspace = true }
 tauri = { version = "2.11", features = ["tray-icon"] }
 tauri-plugin-notification = "2"

@@ -35,7 +35,8 @@ use state::AppState;
 /// The service name under which all Utter secrets are stored in the OS
 /// keyring; the per-secret identity is the keyring *username*, one of
 /// [`STT_KEY_SERVICE`] / [`REFINE_KEY_SERVICE`].
-pub(crate) const KEYRING_SERVICE: &str = "utter";
+pub(crate) const KEYRING_SERVICE: &str = utter_store::APP_IDENTIFIER;
+const LEGACY_KEYRING_SERVICE: &str = "utter";
 pub(crate) const STT_KEY_SERVICE: &str = "stt";
 pub(crate) const REFINE_KEY_SERVICE: &str = "refine";
 
@@ -44,9 +45,18 @@ pub(crate) const REFINE_KEY_SERVICE: &str = "refine";
 /// backend itself is unavailable — every caller treats a missing key as
 /// "not configured yet", not a hard failure.
 pub(crate) fn keyring_password(user: &str) -> Option<String> {
-    keyring::Entry::new(KEYRING_SERVICE, user)
+    let current = keyring::Entry::new(KEYRING_SERVICE, user).ok();
+    if let Some(password) = current.as_ref().and_then(|entry| entry.get_password().ok()) {
+        return Some(password);
+    }
+
+    let password = keyring::Entry::new(LEGACY_KEYRING_SERVICE, user)
         .and_then(|entry| entry.get_password())
-        .ok()
+        .ok()?;
+    if let Some(current) = current {
+        let _ = current.set_password(&password);
+    }
+    Some(password)
 }
 
 /// Turns the `advanced.log_level` setting into a maximum level. Anything
@@ -199,6 +209,15 @@ mod tests {
     #[test]
     fn level_names_are_not_case_sensitive() {
         assert_eq!(max_level("DEBUG"), LevelFilter::DEBUG);
+    }
+
+    #[test]
+    fn bundle_and_keyring_identifiers_match_the_tauri_config() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("valid Tauri config");
+
+        assert_eq!(config["identifier"], utter_store::APP_IDENTIFIER);
+        assert_eq!(KEYRING_SERVICE, utter_store::APP_IDENTIFIER);
     }
 
     /// Every command the settings UI invokes is registered in the

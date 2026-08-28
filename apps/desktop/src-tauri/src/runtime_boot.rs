@@ -73,7 +73,7 @@ pub fn boot(app: &AppHandle) -> Result<(), String> {
     // one-time startup condition, not a per-boot degradation like the ones
     // `build_deps` reports, so it is queued here rather than threaded
     // through `build_deps`'s settings-derived checks.
-    if let Some(msg) = state.startup_notice.clone() {
+    for msg in state.startup_notices.clone() {
         notices.push(("warning", msg));
     }
 
