@@ -9,6 +9,7 @@
   import * as api from '../lib/api'
   import { settingsStore } from '../lib/stores'
   import type {
+    HudPlacement,
     InjectionPreference,
     PermissionKind,
     PermissionStatus,
@@ -30,6 +31,12 @@
     { value: 'clipboard_paste', label: 'Clipboard + paste' },
     { value: 'type', label: 'Simulated typing' },
     { value: 'clipboard_only', label: 'Clipboard only (no auto-paste)' },
+  ]
+
+  const HUD_PLACEMENT_OPTIONS: { value: HudPlacement; label: string }[] = [
+    { value: 'auto', label: 'Automatic (near the caret)' },
+    { value: 'pointer', label: 'Near the pointer' },
+    { value: 'bottom_center', label: 'Bottom center' },
   ]
   let availableInjectionOptions = $derived(
     INJECTION_OPTIONS.filter((option) => capabilities.injection_methods.includes(option.value)),
@@ -221,6 +228,21 @@
   </Field>
 
   {#if capabilities.os === 'macos'}
+    <Field
+      label="HUD position"
+      for="hud-placement"
+      hint="Automatic uses the text caret when Accessibility is allowed, then falls back to the pointer."
+    >
+      <Select
+        id="hud-placement"
+        options={HUD_PLACEMENT_OPTIONS}
+        bind:value={
+          () => settings.dictation.hud_placement,
+          (v) => settingsStore.patch({ dictation: { hud_placement: v as HudPlacement } })
+        }
+      />
+    </Field>
+
     <Field
       label="Accessibility permission"
       hint="Lets Utter place the HUD near the caret and send Command-V to the focused field. Without it, the HUD follows the pointer and text stays on the clipboard."

@@ -20,4 +20,4 @@ pub use models::{
     PerformanceClass,
 };
 pub use profile::{DraftCfg, LanguageProfile, RecognitionCfg, RecognitionPromptMode, RefinePolicy};
-pub use settings::{load, save, Settings};
+pub use settings::{load, save, HudPlacement, Settings};

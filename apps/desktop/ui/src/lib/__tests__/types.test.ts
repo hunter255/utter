@@ -36,6 +36,7 @@ describe('Settings type/JSON round-trip', () => {
         mode: 'toggle',
         silence_timeout_secs: 5,
         hud: false,
+        hud_placement: 'bottom_center',
       },
       refine: {
         enabled: true,
@@ -131,7 +132,12 @@ describe('defaultSettings', () => {
   it('matches Settings::default() field-for-field, including its one seeded profile', () => {
     const expected = {
       general: { language: null, theme: 'system', autostart: false },
-      dictation: { mode: 'push_to_talk', silence_timeout_secs: null, hud: true },
+      dictation: {
+        mode: 'push_to_talk',
+        silence_timeout_secs: null,
+        hud: true,
+        hud_placement: 'auto',
+      },
       refine: {
         enabled: false,
         base_url: 'http://localhost:11434/v1',
