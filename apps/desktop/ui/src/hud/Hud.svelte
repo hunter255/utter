@@ -4,19 +4,13 @@
   import { invoke } from '@tauri-apps/api/core'
 
   import { HUD_STYLE } from './layout'
-
-  type Phase = 'idle' | 'recording' | 'transcribing' | 'refining' | 'injecting'
-
-  interface DictationStatePayload {
-    state: Phase
-    level: number
-    partial: string | null
-  }
+  import { INITIAL_HUD_STATE, inputSignal, reduceHudState } from './state'
+  import type { DictationPhase, DictationStatePayload } from '../lib/types'
 
   const BAR_COUNT = 12
   const barIndices = Array.from({ length: BAR_COUNT }, (_, i) => i)
 
-  const STATE_LABEL: Record<Phase, string> = {
+  const STATE_LABEL: Record<DictationPhase, string> = {
     idle: 'Idle',
     recording: 'Listening',
     transcribing: 'Transcribing',
@@ -24,22 +18,38 @@
     injecting: 'Injecting',
   }
 
-  let phase = $state<Phase>('idle')
-  let level = $state(0)
-  let partial = $state<string | null>(null)
+  const SIGNAL_LABEL = {
+    none: 'No signal',
+    quiet: 'Quiet signal',
+    voice: 'Voice detected',
+  } as const
 
-  // `level` is an RMS amplitude in 0..1 (see `utter_audio::rms_level`); the
-  // count of "lit" bars is how it's surfaced here, rather than driving each
-  // bar's height individually — a steadier, less jittery read at a glance.
-  let activeBars = $derived(Math.round(Math.min(1, Math.max(0, level)) * BAR_COUNT))
+  const EMPTY_PREVIEW: Record<DictationPhase, string> = {
+    idle: '',
+    recording: 'Listening for speech…',
+    transcribing: 'Preparing the final transcript…',
+    refining: 'Refining the transcript…',
+    injecting: 'Delivering text…',
+  }
+
+  let hud = $state({ ...INITIAL_HUD_STATE })
+  let phase = $derived(hud.phase)
+  let partial = $derived(hud.partial)
+  let signal = $derived(inputSignal(hud.meter))
+  let previewText = $derived(partial ?? EMPTY_PREVIEW[phase])
+
+  // `hud.meter` is already converted from linear RMS to a perceptual dBFS
+  // scale and smoothed in `state.ts`. A non-zero quiet signal always lights
+  // at least one bar, so normal speech can no longer look like a dead mic.
+  let activeBars = $derived(
+    hud.meter <= 0.03 ? 0 : Math.max(1, Math.round(hud.meter * BAR_COUNT)),
+  )
 
   let unlisten: UnlistenFn | undefined
 
   onMount(() => {
     listen<DictationStatePayload>('dictation-state', (event) => {
-      phase = event.payload.state
-      level = event.payload.level
-      partial = event.payload.partial
+      hud = reduceHudState(hud, event.payload)
     }).then((fn) => {
       unlisten = fn
     })
@@ -73,17 +83,30 @@
   onkeydown={cancelOnKey}
 >
   <div class="row">
-    <span class="dot"></span>
-    <span class="label">{STATE_LABEL[phase]}</span>
+    <span class="status">
+      <span class="dot"></span>
+      <span class="label">{STATE_LABEL[phase]}</span>
+    </span>
+    {#if phase === 'recording'}
+      <span class="signal" data-signal={signal}>
+        <span class="signal-dot"></span>
+        {SIGNAL_LABEL[signal]}
+      </span>
+    {/if}
   </div>
-  <div class="bars">
+  <div
+    class="bars"
+    role="meter"
+    aria-label="Microphone input level"
+    aria-valuemin="0"
+    aria-valuemax={BAR_COUNT}
+    aria-valuenow={activeBars}
+  >
     {#each barIndices as i (i)}
       <span class="bar" class:active={i < activeBars}></span>
     {/each}
   </div>
-  {#if partial}
-    <div class="partial"><span>{partial}</span></div>
-  {/if}
+  <div class="partial" class:placeholder={partial === null}><span>{previewText}</span></div>
 </div>
 
 <style>
@@ -93,8 +116,9 @@
   }
 
   /* The pill sizes itself from its rows (see `./layout.ts`) rather than to a
-     pinned height: the window is sized for the pill's tallest state, the
-     live preview, and is transparent everywhere the pill isn't.
+     pinned height. Its preview row is always reserved while the HUD is
+     visible, so neither the pill nor its text jumps when the first partial
+     hypothesis arrives.
 
      Pinning the height here is what hid the preview. A fixed-height flex
      column does not overflow when its rows don't fit — it *shrinks* them,
@@ -126,8 +150,20 @@
   .row {
     display: flex;
     align-items: center;
-    gap: 8px;
+    justify-content: space-between;
+    gap: 10px;
     height: var(--hud-status-row);
+  }
+
+  .status,
+  .signal {
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .status {
+    gap: 8px;
+    min-width: 0;
   }
 
   .dot {
@@ -165,6 +201,35 @@
     letter-spacing: 0.02em;
     text-transform: uppercase;
     opacity: 0.85;
+  }
+
+  .signal {
+    gap: 5px;
+    color: rgba(255, 255, 255, 0.64);
+    font-size: 10px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .signal-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.3);
+  }
+
+  .signal[data-signal='quiet'] .signal-dot {
+    background: #f5a623;
+    box-shadow: 0 0 5px rgba(245, 166, 35, 0.55);
+  }
+
+  .signal[data-signal='voice'] {
+    color: rgba(255, 255, 255, 0.86);
+  }
+
+  .signal[data-signal='voice'] .signal-dot {
+    background: #5ee28a;
+    box-shadow: 0 0 5px rgba(94, 226, 138, 0.55);
   }
 
   .bars {
@@ -236,5 +301,9 @@
   .partial span {
     flex: 1;
     overflow-wrap: anywhere;
+  }
+
+  .partial.placeholder {
+    color: rgba(255, 255, 255, 0.48);
   }
 </style>

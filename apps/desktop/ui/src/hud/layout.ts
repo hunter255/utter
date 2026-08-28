@@ -47,22 +47,20 @@ export const PARTIAL_LINE_HEIGHT = 15
  */
 export const PARTIAL_LINES = 2
 
-/** The fixed height the preview row occupies when it is shown at all. */
+/** The fixed height the always-present preview/status row occupies. */
 export const PARTIAL_HEIGHT = PARTIAL_LINE_HEIGHT * PARTIAL_LINES
 
 /**
- * The pill's rendered height, with and without the live-preview row.
+ * The pill's stable rendered height.
  *
- * The preview row is not reserved when there is no preview to show: the
- * feature is off by default and off entirely for every engine that cannot
- * stream, and those users get the same 64px pill they had before it existed.
- * The *window* is sized for the taller of the two states, which costs
- * nothing visually — it is transparent, so the unused strip below the pill
- * is not drawn.
+ * The preview row is always reserved while the HUD is visible. Before that
+ * was true, the pill jumped from 64px to 102px when the first word arrived;
+ * keeping one stable geometry is easier to read and leaves room for a useful
+ * status message when a streaming model has not produced text yet.
  */
-export function pillHeight(showsPartial: boolean): number {
+export function pillHeight(): number {
   const base = PILL_PADDING_Y * 2 + STATUS_ROW_HEIGHT + ROW_GAP + METER_HEIGHT
-  return showsPartial ? base + ROW_GAP + PARTIAL_HEIGHT : base
+  return base + ROW_GAP + PARTIAL_HEIGHT
 }
 
 /** The constants above, as the inline custom properties `Hud.svelte` sets. */
