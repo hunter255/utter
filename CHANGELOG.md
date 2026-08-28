@@ -15,8 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   settings warn about incompatible model/language pairs without silently
   changing either choice.
 - In-progress model downloads can be cancelled from onboarding or Engines.
-  Cancellation cleans the staging area, never publishes a partial install,
-  and leaves the model ready for a fresh retry.
+  Cancellation never publishes a partial install and keeps verified partial
+  bytes so the next attempt can resume instead of downloading from zero.
+- Interrupted model downloads resume with a validated HTTP Range request.
+  Servers that ignore Range restart safely, malformed range responses and
+  checksum failures discard the suspect partial, and connect/no-progress
+  timeouts turn a silent network stall into an actionable retry.
 
 ### Changed
 

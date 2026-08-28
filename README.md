@@ -44,7 +44,9 @@ endpoint, a model download).
   `/audio/transcriptions` endpoint (BYOK). Every model selector is populated
   from the catalog and shows language fit, relative runtime cost, download
   size, and a warning when a profile language does not match the model. Large
-  downloads can be cancelled without leaving a partial model installed.
+  downloads can be cancelled without leaving a partial model installed; the
+  next attempt resumes verified partial bytes, and a stalled connection ends
+  with a clear retry instead of waiting forever.
 - **Live preview** — optionally, a second streaming sherpa-onnx model runs
   alongside the engine above and shows words in the HUD while you are still
   speaking. It is a draft only: the text that actually gets inserted always
