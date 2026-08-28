@@ -62,8 +62,8 @@ pub struct ProfileDeps {
     /// Optional streaming engine fed the same frames as `engine`, whose
     /// partials drive the HUD preview while the user is still speaking. Its
     /// text never contributes to what gets injected or recorded (spec D9) —
-    /// `crate::runtime` never calls `finish()` on it, so there is no code
-    /// path where its output could be mistaken for a transcript.
+    /// `crate::runtime` consumes its final flushed text only as a HUD event,
+    /// separately from the final engine's authoritative transcript.
     ///
     /// Per-profile rather than per-runtime because a preview model is
     /// language-specific exactly like the profile's own engine: one global
@@ -214,6 +214,10 @@ impl ProfileLoader for RealProfileLoader {
 struct Entry {
     profile: LanguageProfile,
     deps: Option<ProfileDeps>,
+    /// Changes every time this entry is actually loaded after being absent.
+    /// Asynchronous draft work carries this value so a result from an
+    /// evicted engine cannot be restored into a later lazy reload.
+    load_epoch: u64,
     /// Set whenever this entry is loaded or selected, and again when its
     /// dictation session finishes. `None` means the dependencies are not in
     /// memory, so there is nothing for the eviction pass to consider.
@@ -294,6 +298,7 @@ impl ProfileRegistry {
             .map(|profile| Entry {
                 profile,
                 deps: None,
+                load_epoch: 0,
                 last_used: None,
             })
             .collect();
@@ -359,6 +364,15 @@ impl ProfileRegistry {
         self.idle_timeout = idle_timeout;
     }
 
+    /// Returns the identity of the currently resident load without causing a
+    /// lazy load. `None` means the binding is absent or has been evicted.
+    pub(crate) fn loaded_epoch(&self, id: BindingId) -> Option<u64> {
+        self.entries
+            .get(id.index())
+            .filter(|entry| entry.deps.is_some())
+            .map(|entry| entry.load_epoch)
+    }
+
     /// Records the end of a session so the timeout starts after the user is
     /// actually finished, not after the last audio frame happened to touch
     /// the profile.
@@ -368,6 +382,38 @@ impl ProfileRegistry {
                 entry.last_used = Some(now);
             }
         }
+    }
+
+    /// Restores a healthy draft engine returned by an asynchronous flush,
+    /// but only into the exact load of the registry entry that is still
+    /// resident and still has an empty draft slot.
+    ///
+    /// Unlike [`Self::deps_for`], this never calls the loader. A late result
+    /// `expected_epoch` also prevents work from before an idle eviction from
+    /// entering a later lazy reload. A late result must not resurrect an
+    /// idle-evicted profile, overwrite a newer preview engine, or make an old
+    /// settings generation allocate models again.
+    /// Returns whether the engine was restored; on `false` it is dropped.
+    pub(crate) fn restore_draft_if_loaded(
+        &mut self,
+        id: BindingId,
+        expected_epoch: u64,
+        draft: Box<dyn SttEngine>,
+    ) -> bool {
+        let Some(entry) = self.entries.get_mut(id.index()) else {
+            return false;
+        };
+        if entry.load_epoch != expected_epoch {
+            return false;
+        }
+        let Some(deps) = entry.deps.as_mut() else {
+            return false;
+        };
+        if deps.draft_engine.is_some() {
+            return false;
+        }
+        deps.draft_engine = Some(draft);
+        true
     }
 
     /// Drops every expired, inactive profile as one [`ProfileDeps`] value.
@@ -405,6 +451,7 @@ impl ProfileRegistry {
             return Vec::new();
         }
         let (deps, notices) = self.loader.load(&self.entries[index].profile);
+        self.entries[index].load_epoch = self.entries[index].load_epoch.wrapping_add(1);
         self.entries[index].deps = Some(deps);
         self.entries[index].last_used = Some(now);
         notices
@@ -625,6 +672,52 @@ mod tests {
             .deps_for_at(BindingId::from(1), now + Duration::from_secs(33))
             .expect("following press reuses that reload");
         assert_eq!(registry.load_count(), 3, "reload happens exactly once");
+    }
+
+    #[test]
+    fn a_late_draft_from_before_eviction_cannot_enter_the_reloaded_profile() {
+        let now = Instant::now();
+        let binding = BindingId::from(0);
+        let mut registry = test_registry_with_counting_loader_at(now);
+        let old_epoch = registry
+            .registry
+            .loaded_epoch(binding)
+            .expect("default profile is eagerly loaded");
+        registry
+            .registry
+            .set_idle_timeout(Some(Duration::from_secs(1)));
+
+        assert_eq!(
+            registry
+                .registry
+                .evict_expired(now + Duration::from_secs(1), None),
+            1
+        );
+        registry
+            .deps_for_at(binding, now + Duration::from_secs(2))
+            .expect("next press lazily reloads the profile");
+        let current_epoch = registry
+            .registry
+            .loaded_epoch(binding)
+            .expect("reloaded profile is resident");
+        assert_ne!(old_epoch, current_epoch);
+
+        assert!(
+            !registry
+                .registry
+                .restore_draft_if_loaded(binding, old_epoch, Box::new(HealthyEngine),),
+            "an outcome owned by the evicted load must be discarded"
+        );
+        assert!(
+            registry.registry.restore_draft_if_loaded(
+                binding,
+                current_epoch,
+                Box::new(HealthyEngine),
+            ),
+            "the resident load may restore its own healthy draft engine"
+        );
+        let (deps, _) = registry.deps_for(binding).expect("binding remains valid");
+        assert!(deps.draft_engine.is_some());
     }
 
     #[test]
