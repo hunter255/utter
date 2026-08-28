@@ -85,6 +85,9 @@ endpoint, a model download).
   model download, hotkey choice, and permissions. The General page's Launch
   at login switch manages the operating system's startup registration and is
   reconciled with the saved preference on every app start.
+- **Persistent diagnostics** — GUI launches keep a small bounded set of local
+  log files, with credentials, URL queries and the personal home path
+  redacted before each line reaches disk.
 
 ## Screenshots
 
@@ -289,6 +292,9 @@ rejected, so the format tolerates being hand-edited or partially upgraded.
   The default is 1800 seconds (30 minutes); `0` is the persistent Never
   choice when models should remain resident until settings reload or app
   exit.
+- **Diagnostics** — logs live under the platform app-data directory in
+  `logs/`, rotate at roughly 1 MiB each, and keep at most four files.
+  Increasing `advanced.log_level` changes how much a future launch records.
 - **Dictionary and snippets** — custom terms and replacement rules live
   under `[dictionary]`; snippets are a list of trigger/body pairs under
   `[[snippets]]`. Both are editable from the settings UI.

@@ -6,6 +6,7 @@ mod autostart;
 mod commands;
 /// Event payload shapes shared with the frontend.
 pub mod events;
+mod logging;
 #[cfg(target_os = "macos")]
 mod macos_hotkeys;
 mod permissions;
@@ -75,19 +76,19 @@ fn max_level(setting: &str) -> LevelFilter {
     }
 }
 
-/// Installs the `tracing` subscriber every crate in the workspace logs
-/// through, writing to stderr. Without it `tracing`'s events go nowhere at
-/// all: not to a file, not to a console, not anywhere the user or a bug
-/// report can reach — which is what `advanced.log_level` has been promising
-/// to control.
-///
-/// Failure here means a subscriber is already installed (nothing else can
-/// fail), so there is nothing to report and nowhere to report it.
-fn init_tracing(setting: &str) {
-    let _ = tracing_subscriber::fmt()
+/// Installs the bounded, redacting writer used by every crate in the
+/// workspace. If its directory is unavailable, the same subscriber writes
+/// to stderr and returns a notice instead of aborting the GUI app.
+fn init_tracing(setting: &str) -> Option<String> {
+    let (writer, warning) = logging::log_writer();
+    if let Err(error) = tracing_subscriber::fmt()
         .with_max_level(max_level(setting))
-        .with_writer(std::io::stderr)
-        .try_init();
+        .with_writer(writer)
+        .try_init()
+    {
+        eprintln!("failed to install tracing subscriber: {error}");
+    }
+    warning
 }
 
 /// Builds and runs the Tauri application.
@@ -116,9 +117,13 @@ pub fn run() -> Result<(), String> {
             let mut state = AppState::new().map_err(|e| e.to_string())?;
             // As early as settings are available, and before `boot` — every
             // degradation it reports is logged on the way past.
-            match state.settings.read() {
-                Ok(settings) => init_tracing(&settings.advanced.log_level),
-                Err(_) => init_tracing("info"),
+            let log_level = state
+                .settings
+                .read()
+                .map(|settings| settings.advanced.log_level.clone())
+                .unwrap_or_else(|_| "info".to_string());
+            if let Some(notice) = init_tracing(&log_level) {
+                state.startup_notices.push(notice);
             }
 
             // Settings are the source of truth across reinstalls and OS

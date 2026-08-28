@@ -29,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by default, with 15/30/60-minute and Never choices in Advanced settings.
   Active dictation is protected, and the next press lazily reloads the whole
   profile bundle when needed.
+- Desktop logs persist across GUI launches in a four-file bounded rotation.
+  Credentials, URL queries, and personal home paths are redacted before a
+  line reaches disk; an unwritable log directory degrades to console logging
+  and a notice instead of stopping startup.
 
 ### Changed
 
