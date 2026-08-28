@@ -42,10 +42,63 @@ fn default_n_threads() -> i32 {
 pub struct WhisperEngine {
     ctx: WhisperContext,
     n_threads: i32,
+    decode: WhisperDecodeConfig,
     /// `Some` between `begin` and `finish`; `None` otherwise. Doubles as the
     /// "has begin() been called yet" flag that `feed`/`finish` check.
     opts: Option<TranscribeOptions>,
     buffer: Vec<i16>,
+}
+
+/// Model-specific whisper.cpp decoding behavior.
+///
+/// The default preserves Utter's original short-utterance behavior. Models
+/// with a measured recipe opt in explicitly instead of changing every
+/// Whisper profile when a new tuning is introduced.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WhisperDecodeConfig {
+    single_segment: bool,
+    condition_on_previous_text: bool,
+    max_text_context: Option<i32>,
+    entropy_threshold: Option<f32>,
+}
+
+impl WhisperDecodeConfig {
+    /// Carries decoded text between audio windows without changing fallback
+    /// thresholds. This is the baseline recipe for models that benefit from
+    /// normal Whisper context but not the anti-hallucination tuning.
+    pub const fn contextual() -> Self {
+        Self {
+            single_segment: false,
+            condition_on_previous_text: true,
+            max_text_context: None,
+            entropy_threshold: None,
+        }
+    }
+
+    /// The benchmarked anti-hallucination recipe: carry previous text, cap
+    /// that context at 128 tokens, and relax the entropy fallback to 2.8.
+    pub const fn anti_hallucination() -> Self {
+        Self {
+            single_segment: false,
+            condition_on_previous_text: true,
+            max_text_context: Some(128),
+            entropy_threshold: Some(2.8),
+        }
+    }
+}
+
+impl Default for WhisperDecodeConfig {
+    fn default() -> Self {
+        Self {
+            single_segment: true,
+            // whisper.cpp's bundled default is `no_context = true`, despite
+            // older whisper-rs docs saying otherwise. State it explicitly so
+            // an upstream default change cannot alter existing profiles.
+            condition_on_previous_text: false,
+            max_text_context: None,
+            entropy_threshold: None,
+        }
+    }
 }
 
 impl WhisperEngine {
@@ -56,6 +109,14 @@ impl WhisperEngine {
     /// [`SttError::Engine`] if whisper.cpp rejects the file (e.g. it exists
     /// but is not a valid model).
     pub fn load(model_path: &Path) -> Result<Self, SttError> {
+        Self::load_with_config(model_path, WhisperDecodeConfig::default())
+    }
+
+    /// Loads a whisper.cpp model with an explicit decoding recipe.
+    pub fn load_with_config(
+        model_path: &Path,
+        decode: WhisperDecodeConfig,
+    ) -> Result<Self, SttError> {
         if !model_path.is_file() {
             return Err(SttError::ModelNotFound(model_path.display().to_string()));
         }
@@ -68,6 +129,7 @@ impl WhisperEngine {
         Ok(Self {
             ctx,
             n_threads: default_n_threads(),
+            decode,
             opts: None,
             buffer: Vec::new(),
         })
@@ -86,7 +148,7 @@ impl SttEngine for WhisperEngine {
 
     fn finish(&mut self) -> Result<Transcript, SttError> {
         let (opts, buffer) = take_session(&mut self.opts, &mut self.buffer)?;
-        run_full_inference(&self.ctx, self.n_threads, &opts, &buffer)
+        run_full_inference(&self.ctx, self.n_threads, self.decode, &opts, &buffer)
     }
 }
 
@@ -146,6 +208,7 @@ fn take_session(
 fn run_full_inference(
     ctx: &WhisperContext,
     n_threads: i32,
+    decode: WhisperDecodeConfig,
     opts: &TranscribeOptions,
     samples: &[i16],
 ) -> Result<Transcript, SttError> {
@@ -167,7 +230,14 @@ fn run_full_inference(
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 5 });
     params.set_n_threads(n_threads);
     params.set_translate(false);
-    params.set_single_segment(true);
+    params.set_single_segment(decode.single_segment);
+    params.set_no_context(!decode.condition_on_previous_text);
+    if let Some(max_text_context) = decode.max_text_context {
+        params.set_n_max_text_ctx(max_text_context);
+    }
+    if let Some(entropy_threshold) = decode.entropy_threshold {
+        params.set_entropy_thold(entropy_threshold);
+    }
     params.set_print_special(false);
     params.set_print_progress(false);
     params.set_print_realtime(false);
@@ -190,11 +260,9 @@ fn run_full_inference(
         .full(params, &audio)
         .map_err(|e| SttError::Engine(format!("whisper inference failed: {e}")))?;
 
-    // `set_single_segment(true)` above means whisper.cpp should only ever
-    // produce one segment, but segments are still joined defensively (with a
-    // single space, dropping any empty or non-speech-annotation ones)
-    // rather than assumed to be exactly one, so a future change to that
-    // parameter can't silently glue words together with no separator.
+    // Short-utterance recipes normally produce one segment, while contextual
+    // recipes deliberately allow multiple windows. Join both forms with a
+    // single space and drop empty/non-speech-only segments.
     let mut raw_segments = Vec::new();
     for segment in state.as_iter() {
         let segment_text = segment
@@ -301,6 +369,36 @@ mod tests {
     use std::path::Path;
 
     use super::*;
+
+    #[test]
+    fn default_decode_config_preserves_short_utterance_behavior() {
+        let config = WhisperDecodeConfig::default();
+
+        assert!(config.single_segment);
+        assert!(!config.condition_on_previous_text);
+        assert_eq!(config.max_text_context, None);
+        assert_eq!(config.entropy_threshold, None);
+    }
+
+    #[test]
+    fn contextual_decode_config_keeps_normal_fallback_thresholds() {
+        let config = WhisperDecodeConfig::contextual();
+
+        assert!(!config.single_segment);
+        assert!(config.condition_on_previous_text);
+        assert_eq!(config.max_text_context, None);
+        assert_eq!(config.entropy_threshold, None);
+    }
+
+    #[test]
+    fn anti_hallucination_config_matches_the_benchmarked_recipe() {
+        let config = WhisperDecodeConfig::anti_hallucination();
+
+        assert!(!config.single_segment);
+        assert!(config.condition_on_previous_text);
+        assert_eq!(config.max_text_context, Some(128));
+        assert_eq!(config.entropy_threshold, Some(2.8));
+    }
 
     #[test]
     fn load_missing_path_returns_model_not_found() {

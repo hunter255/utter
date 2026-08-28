@@ -4,7 +4,7 @@
 pub mod whisper;
 
 #[cfg(feature = "whisper")]
-pub use whisper::WhisperEngine;
+pub use whisper::{WhisperDecodeConfig, WhisperEngine};
 
 #[cfg(feature = "cloud")]
 pub mod cloud;
