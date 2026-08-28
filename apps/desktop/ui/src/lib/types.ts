@@ -242,12 +242,20 @@ export function deepEqual(a: unknown, b: unknown): boolean {
 }
 
 /** `crates/utter-store/src/models.rs::ModelInfo` */
+export type ModelRole = 'final' | 'preview'
+export type PerformanceClass = 'fast' | 'balanced' | 'heavy'
+
 export interface ModelInfo {
   id: string
   engine: string
   label: string
   size_mb: number
   installed: boolean
+  /** BCP-47 prefixes; `*` means broadly multilingual. */
+  supported_languages: string[]
+  role: ModelRole
+  performance_class: PerformanceClass
+  recommendation_tags: string[]
 }
 
 /** `crates/utter-store/src/history.rs::HistoryEntry` */

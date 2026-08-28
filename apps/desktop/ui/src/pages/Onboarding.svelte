@@ -7,7 +7,13 @@
   import Select from '../lib/components/Select.svelte'
   import * as api from '../lib/api'
   import { hasBaseKey, parseChordTokens } from '../lib/hotkey'
-  import { transcriptionModelOptions, transcriptionModels } from '../lib/models'
+  import {
+    modelCapabilityLabel,
+    modelLanguageWarning,
+    transcriptionLanguageOptions,
+    transcriptionModelOptions,
+    transcriptionModels,
+  } from '../lib/models'
   import { settingsStore } from '../lib/stores'
   import type {
     EngineCfg,
@@ -69,6 +75,7 @@
   // either final-transcript engine. Streaming preview models stay out of this list because they
   // cannot replace the model whose text is inserted into the focused app.
   let profileEngine = $derived(settings.profiles[0]?.engine.active ?? 'whisper')
+  let profileLanguage = $derived(settings.profiles[0]?.language ?? '')
   let profileModelId = $derived(
     profileEngine === 'sherpa'
       ? settings.profiles[0]?.engine.sherpa_model
@@ -77,6 +84,7 @@
         : null,
   )
   let localModels = $derived(transcriptionModels(models))
+  let languagePickerOptions = $derived(transcriptionLanguageOptions(models))
   let modelPickerOptions = $derived([
     {
       value: '',
@@ -88,6 +96,15 @@
     localModels.find((model) => model.id === profileModelId) ?? null,
   )
   let selectedModelInstalled = $derived(selectedModel?.installed ?? false)
+  let languageWarning = $derived(modelLanguageWarning(selectedModel, profileLanguage))
+
+  function selectLanguage(language: string) {
+    settingsStore.patch({
+      profiles: settings.profiles.map((profile, index) =>
+        index === 0 ? { ...profile, language } : profile,
+      ),
+    })
+  }
 
   function selectModel(id: string) {
     if (!id) return
@@ -283,20 +300,34 @@
     {:else if step === 2}
       <h1>Speech model</h1>
       <p class="muted">
-        Choose the local model for your first profile. This switches both its engine and model;
-        you can change them later under Profiles.
+        Choose the language and local model for your first profile. All final-transcript models
+        in the catalog are available here; live-preview-only models stay separate.
       </p>
-      <Select
-        id="onboarding-model"
-        options={modelPickerOptions}
-        disabled={models.length === 0}
-        bind:value={
-          () => (profileEngine === 'cloud' ? '' : (profileModelId ?? '')),
-          selectModel
-        }
-      />
+      <div class="picker-field">
+        <label for="onboarding-language">Language</label>
+        <Select
+          id="onboarding-language"
+          options={languagePickerOptions}
+          bind:value={() => profileLanguage, selectLanguage}
+        />
+      </div>
+      <div class="picker-field">
+        <label for="onboarding-model">Model</label>
+        <Select
+          id="onboarding-model"
+          options={modelPickerOptions}
+          disabled={models.length === 0}
+          bind:value={
+            () => (profileEngine === 'cloud' ? '' : (profileModelId ?? '')),
+            selectModel
+          }
+        />
+      </div>
       {#if modelsError}
         <p class="error">{modelsError}</p>
+      {/if}
+      {#if languageWarning}
+        <p class="warn">{languageWarning}</p>
       {/if}
       {#if profileEngine === 'cloud' && !selectedModel}
         <p class="muted">
@@ -311,7 +342,7 @@
                 <span class="model-label">{selectedModel.label}</span>
                 <span class="model-size">
                   {selectedModel.engine === 'whisper' ? 'Whisper' : 'Sherpa-onnx'} ·
-                  {selectedModel.size_mb} MB
+                  {modelCapabilityLabel(selectedModel)} · {selectedModel.size_mb} MB
                 </span>
               </div>
               {#if selectedModel.installed}
@@ -558,6 +589,17 @@
   .ok {
     color: var(--success);
     font-size: 13px;
+  }
+
+  .picker-field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .picker-field label {
+    font-size: 13px;
+    font-weight: 600;
   }
 
   ul {

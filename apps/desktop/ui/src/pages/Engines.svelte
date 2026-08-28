@@ -5,7 +5,7 @@
   import Field from '../lib/components/Field.svelte'
   import TextInput from '../lib/components/TextInput.svelte'
   import * as api from '../lib/api'
-  import { previewModels } from '../lib/models'
+  import { modelCapabilityLabel, previewModels } from '../lib/models'
   import type { ModelInfo } from '../lib/types'
 
   let models = $state<ModelInfo[]>([])
@@ -17,8 +17,8 @@
   let sttKeyJustSaved = $state(false)
   let sttKeyError = $state('')
 
-  let whisperModels = $derived(models.filter((m) => m.engine === 'whisper'))
-  let sherpaModels = $derived(models.filter((m) => m.engine === 'sherpa'))
+  let whisperModels = $derived(models.filter((m) => m.role === 'final' && m.engine === 'whisper'))
+  let sherpaModels = $derived(models.filter((m) => m.role === 'final' && m.engine === 'sherpa'))
   let streamingModels = $derived(previewModels(models))
 
   let unlisten: (() => void) | undefined
@@ -119,7 +119,7 @@
         <div class="model-row">
           <div class="model-info">
             <span class="model-label">{model.label}</span>
-            <span class="model-size">{model.size_mb} MB</span>
+            <span class="model-size">{modelCapabilityLabel(model)} · {model.size_mb} MB</span>
           </div>
           <div class="model-actions">
             {#if model.installed}
@@ -151,7 +151,7 @@
         <div class="model-row">
           <div class="model-info">
             <span class="model-label">{model.label}</span>
-            <span class="model-size">{model.size_mb} MB</span>
+            <span class="model-size">{modelCapabilityLabel(model)} · {model.size_mb} MB</span>
           </div>
           <div class="model-actions">
             {#if model.installed}
@@ -183,7 +183,7 @@
         <div class="model-row">
           <div class="model-info">
             <span class="model-label">{model.label}</span>
-            <span class="model-size">{model.size_mb} MB</span>
+            <span class="model-size">{modelCapabilityLabel(model)} · {model.size_mb} MB</span>
           </div>
           <div class="model-actions">
             {#if model.installed}
