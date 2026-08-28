@@ -237,6 +237,10 @@ fn build_deps(
             .map(|secs| Duration::from_secs(u64::from(secs))),
         profiles,
         injector,
+        automatic_paste_expected: !matches!(
+            settings.advanced.injection,
+            InjectionPreference::ClipboardOnly
+        ),
         rules: settings.dictionary.rules.clone(),
         snippets: settings.snippets.clone(),
         history,

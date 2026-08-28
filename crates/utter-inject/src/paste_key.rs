@@ -111,12 +111,10 @@ mod platform {
 
     impl PasteKey {
         pub(crate) fn new() -> Result<Self, InjectError> {
-            if !post_event_access() {
-                return Err(InjectError::NoBackend(
-                    "macOS text-injection permission is not granted".to_string(),
-                ));
-            }
-
+            // Accessibility can be granted or revoked while Utter is
+            // running. Keep this backend in the Auto chain and probe the
+            // live permission for every paste instead of freezing the TCC
+            // state that happened to exist during startup.
             Ok(Self)
         }
 
@@ -152,6 +150,11 @@ mod platform {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn backend_construction_does_not_freeze_the_current_permission_state() {
+            assert!(PasteKey::new().is_ok());
+        }
 
         #[test]
         fn command_v_sequence_keeps_command_held_around_v() {

@@ -10,6 +10,7 @@
   import { settingsStore } from '../lib/stores'
   import type {
     InjectionPreference,
+    PermissionKind,
     PermissionStatus,
     PlatformCapabilities,
     UpdateCheck,
@@ -53,7 +54,9 @@
   let devicesError = $state('')
   let microphonePermission = $state<PermissionStatus | null>(null)
   let microphoneResetCommand = $state('')
-  let permissionBusy = $state(false)
+  let textInjectionPermission = $state<PermissionStatus | null>(null)
+  let textInjectionResetCommand = $state('')
+  let permissionBusy = $state<PermissionKind | null>(null)
   let permissionError = $state('')
   let diagnosticsBusy = $state<'open' | 'copy' | null>(null)
   let diagnosticsMessage = $state('')
@@ -69,13 +72,15 @@
     return Math.min(100, Math.round((progress.downloaded / progress.total) * 100))
   })
 
-  async function refreshMicrophonePermission() {
+  async function refreshMacosPermissions() {
     if (capabilities.os !== 'macos') return
     try {
       const report = await api.permissionsReport()
       if (report.platform === 'macos') {
         microphonePermission = report.microphone
         microphoneResetCommand = report.microphone_reset_command
+        textInjectionPermission = report.text_injection
+        textInjectionResetCommand = report.text_injection_reset_command
       }
       permissionError = ''
     } catch (err) {
@@ -83,19 +88,21 @@
     }
   }
 
-  async function requestMicrophonePermission() {
-    permissionBusy = true
+  async function requestMacosPermission(kind: PermissionKind) {
+    permissionBusy = kind
     permissionError = ''
     try {
-      const report = await api.requestPermission('microphone')
+      const report = await api.requestPermission(kind)
       if (report.platform === 'macos') {
         microphonePermission = report.microphone
         microphoneResetCommand = report.microphone_reset_command
+        textInjectionPermission = report.text_injection
+        textInjectionResetCommand = report.text_injection_reset_command
       }
     } catch (err) {
       permissionError = String(err)
     } finally {
-      permissionBusy = false
+      permissionBusy = null
     }
   }
 
@@ -177,7 +184,7 @@
         })
     }
 
-    void refreshMicrophonePermission()
+    void refreshMacosPermissions()
     void api
       .listDevices()
       .then((available) => (devices = available))
@@ -213,6 +220,48 @@
     {/if}
   </Field>
 
+  {#if capabilities.os === 'macos'}
+    <Field
+      label="Automatic paste permission"
+      hint="macOS Accessibility lets Utter send Command-V to the field that was focused when dictation finished."
+    >
+      {#if permissionError}
+        <p class="error">{permissionError}</p>
+      {:else if textInjectionPermission === null}
+        <p class="muted">Checking…</p>
+      {:else}
+        <p class:ok={textInjectionPermission === 'granted'}>
+          Status: {textInjectionPermission.replace('_', ' ')}
+        </p>
+        {#if textInjectionPermission === 'not_determined'}
+          <button
+            type="button"
+            onclick={() => requestMacosPermission('text_injection')}
+            disabled={permissionBusy !== null}
+          >
+            {permissionBusy === 'text_injection' ? 'Requesting…' : 'Allow automatic paste'}
+          </button>
+        {:else if textInjectionPermission === 'denied'}
+          <p class="warning">
+            Enable Utter in System Settings → Privacy & Security → Accessibility, then check again.
+          </p>
+          {#if textInjectionResetCommand}
+            <MacosPermissionRecovery
+              kind="text_injection"
+              command={textInjectionResetCommand}
+              onError={(message) => (permissionError = message)}
+            />
+            <p class="muted">
+              Use reset only for a missing or stale entry: copy it, quit Utter, run it in
+              Terminal, then reopen Utter and allow access again.
+            </p>
+          {/if}
+          <button type="button" onclick={refreshMacosPermissions}>Check again</button>
+        {/if}
+      {/if}
+    </Field>
+  {/if}
+
   <Field label="Audio input device" for="audio-device">
     {#if devicesError}
       <p class="error">{devicesError}</p>
@@ -241,8 +290,12 @@
           Status: {microphonePermission.replace('_', ' ')}
         </p>
         {#if microphonePermission === 'not_determined'}
-          <button type="button" onclick={requestMicrophonePermission} disabled={permissionBusy}>
-            {permissionBusy ? 'Requesting…' : 'Allow microphone'}
+          <button
+            type="button"
+            onclick={() => requestMacosPermission('microphone')}
+            disabled={permissionBusy !== null}
+          >
+            {permissionBusy === 'microphone' ? 'Requesting…' : 'Allow microphone'}
           </button>
         {:else if microphonePermission === 'denied'}
           <p class="warning">
@@ -259,7 +312,7 @@
               Terminal, then reopen Utter and allow access again.
             </p>
           {/if}
-          <button type="button" onclick={refreshMicrophonePermission}>Check again</button>
+          <button type="button" onclick={refreshMacosPermissions}>Check again</button>
         {/if}
       {/if}
     </Field>

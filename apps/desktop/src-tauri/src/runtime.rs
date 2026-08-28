@@ -120,7 +120,7 @@ use crossbeam_channel::{select, tick, unbounded, Receiver, Sender};
 
 use utter_audio::{rms_level, AudioError, AudioFrame, CaptureEvent, SilenceDetector};
 use utter_core::{
-    DictationMode, Effect, Event, Session, State, TextInjector, TextRefiner, Tone,
+    DictationMode, Effect, Event, InjectionMethod, Session, State, TextInjector, TextRefiner, Tone,
     TranscribeOptions, Transcript,
 };
 use utter_inject::{BindingId, HotkeyEvent};
@@ -215,6 +215,11 @@ pub struct RuntimeDeps {
     /// tone, building them lazily on first use. See [`crate::profiles`].
     pub profiles: ProfileRegistry,
     pub injector: Box<dyn TextInjector>,
+    /// Whether the selected injection preference promised an automatic
+    /// delivery attempt. If every such backend fails and the chain reaches
+    /// clipboard-only, the runtime tells the user instead of reporting a
+    /// silent success.
+    pub automatic_paste_expected: bool,
     pub rules: Vec<ReplaceRule>,
     pub snippets: Vec<Snippet>,
     pub history: Option<HistoryHandle>,
@@ -343,6 +348,7 @@ struct WorkerCtx {
     /// one.
     active_binding: Option<BindingId>,
     injector: Box<dyn TextInjector>,
+    automatic_paste_expected: bool,
     rules: Vec<ReplaceRule>,
     snippets: Vec<Snippet>,
     history: Option<HistoryHandle>,
@@ -390,6 +396,7 @@ impl WorkerCtx {
             profiles: deps.profiles,
             active_binding: None,
             injector: deps.injector,
+            automatic_paste_expected: deps.automatic_paste_expected,
             rules: deps.rules,
             snippets: deps.snippets,
             history: deps.history,
@@ -424,6 +431,7 @@ impl WorkerCtx {
         self.profiles = deps.profiles;
         self.active_binding = None;
         self.injector = deps.injector;
+        self.automatic_paste_expected = deps.automatic_paste_expected;
         self.rules = deps.rules;
         self.snippets = deps.snippets;
         self.history = deps.history;
@@ -1061,6 +1069,13 @@ fn refine_with_timeout(
 fn run_inject(session: &mut Session, ctx: &mut WorkerCtx, text: String) {
     match ctx.injector.inject(&text) {
         Ok(method) => {
+            if method == InjectionMethod::ClipboardOnly && ctx.automatic_paste_expected {
+                ctx.sink.notify(
+                    "warning",
+                    "Automatic paste was unavailable, so the text was copied to the clipboard. \
+                     Check text-injection permission and keep the target field focused.",
+                );
+            }
             record_history(ctx, &text);
             dispatch(session, ctx, Event::InjectDone(method));
         }

@@ -225,6 +225,7 @@ impl TextRefiner for FakeRefiner {
 struct FakeInjector {
     injected: Arc<Mutex<Vec<String>>>,
     fail: bool,
+    method: InjectionMethod,
 }
 
 impl TextInjector for FakeInjector {
@@ -233,7 +234,7 @@ impl TextInjector for FakeInjector {
             return Err(InjectError::Backend("injection failed".to_string()));
         }
         self.injected.lock().expect("lock").push(text.to_string());
-        Ok(InjectionMethod::Type)
+        Ok(self.method)
     }
 }
 
@@ -496,6 +497,8 @@ struct DepsBuilder {
     finish_delay: Duration,
     refiner: Option<(RefineBehavior, Arc<AtomicUsize>)>,
     inject_fail: bool,
+    injection_method: InjectionMethod,
+    automatic_paste_expected: bool,
     injected: Arc<Mutex<Vec<String>>>,
     rules: Vec<ReplaceRule>,
     snippets: Vec<Snippet>,
@@ -535,6 +538,8 @@ impl DepsBuilder {
             finish_delay: Duration::ZERO,
             refiner: None,
             inject_fail: false,
+            injection_method: InjectionMethod::Type,
+            automatic_paste_expected: false,
             injected: Arc::new(Mutex::new(Vec::new())),
             rules: Vec::new(),
             snippets: Vec::new(),
@@ -594,7 +599,9 @@ impl DepsBuilder {
             injector: Box::new(FakeInjector {
                 injected: self.injected,
                 fail: self.inject_fail,
+                method: self.injection_method,
             }),
+            automatic_paste_expected: self.automatic_paste_expected,
             rules: self.rules,
             snippets: self.snippets,
             history: self.history,
@@ -753,6 +760,44 @@ fn happy_path_emits_full_sequence_and_injects_refined_text() {
     // path would be a popup over whatever they are typing into, once per
     // utterance -- worse than the silence it replaced.
     assert_no_more_notices(&notices_rx);
+
+    handle.shutdown();
+}
+
+#[test]
+fn automatic_injection_reports_when_it_falls_back_to_clipboard_only() {
+    let (sink, states_rx, notices_rx) = fake_sink();
+    let (hotkey_tx, hotkey_rx) = unbounded();
+    let mut builder = DepsBuilder::new(Ok(transcript("copied fallback")));
+    builder.injection_method = InjectionMethod::ClipboardOnly;
+    builder.automatic_paste_expected = true;
+
+    let handle = Runtime::spawn(builder.build(hotkey_rx), sink);
+    press_and_release(&hotkey_tx, &states_rx, BindingId::from(0));
+
+    let (kind, message) = recv_notice(&notices_rx);
+    assert_eq!(kind, "warning");
+    assert!(message.contains("copied to the clipboard"));
+    assert!(message.contains("text-injection permission"));
+
+    handle.shutdown();
+}
+
+#[test]
+fn explicit_clipboard_only_does_not_warn_about_its_selected_behavior() {
+    let (sink, states_rx, notices_rx) = fake_sink();
+    let (hotkey_tx, hotkey_rx) = unbounded();
+    let mut builder = DepsBuilder::new(Ok(transcript("copied by choice")));
+    builder.injection_method = InjectionMethod::ClipboardOnly;
+    builder.automatic_paste_expected = false;
+
+    let handle = Runtime::spawn(builder.build(hotkey_rx), sink);
+    press_and_release(&hotkey_tx, &states_rx, BindingId::from(0));
+
+    assert!(
+        notices_rx.try_recv().is_err(),
+        "clipboard-only is an explicit delivery mode, not a degradation"
+    );
 
     handle.shutdown();
 }
@@ -1720,7 +1765,9 @@ fn each_hotkey_dictates_with_its_own_profile() {
         injector: Box::new(FakeInjector {
             injected: injected.clone(),
             fail: false,
+            method: InjectionMethod::Type,
         }),
+        automatic_paste_expected: false,
         rules: Vec::new(),
         snippets: Vec::new(),
         history: None,
@@ -1785,7 +1832,9 @@ fn each_profile_applies_its_own_refine_enabled_flag_at_press_time() {
         injector: Box::new(FakeInjector {
             injected: injected.clone(),
             fail: false,
+            method: InjectionMethod::Type,
         }),
+        automatic_paste_expected: false,
         rules: Vec::new(),
         snippets: Vec::new(),
         history: None,
@@ -1883,7 +1932,9 @@ fn second_binding_pressed_mid_recording_in_toggle_mode_stops_binding_zeros_sessi
         injector: Box::new(FakeInjector {
             injected: injected.clone(),
             fail: false,
+            method: InjectionMethod::Type,
         }),
+        automatic_paste_expected: false,
         rules: Vec::new(),
         snippets: Vec::new(),
         history: None,
@@ -1971,7 +2022,9 @@ fn history_entry_attributes_to_the_profile_that_was_actually_pressed() {
         injector: Box::new(FakeInjector {
             injected: Arc::new(Mutex::new(Vec::new())),
             fail: false,
+            method: InjectionMethod::Type,
         }),
+        automatic_paste_expected: false,
         rules: Vec::new(),
         snippets: Vec::new(),
         history: Some(history),
