@@ -302,7 +302,24 @@ export interface PlatformCapabilities {
   os: 'linux' | 'macos' | 'other'
   modifier_only_hotkeys: boolean
   injection_methods: InjectionPreference[]
+  updater: boolean
 }
+
+/** Release-only updater command/event contracts from `src-tauri/src/updater.rs`. */
+export interface UpdateInfo {
+  version: string
+  notes: string | null
+}
+
+export interface UpdateCheck {
+  current_version: string
+  update: UpdateInfo | null
+}
+
+export type UpdateProgressPayload =
+  | { event: 'started'; total: number | null }
+  | { event: 'progress'; downloaded: number; total: number | null }
+  | { event: 'finished' }
 
 /** Payload of the `model-progress` event (`src-tauri/src/events.rs::ModelProgress`). */
 export interface ModelProgressPayload {

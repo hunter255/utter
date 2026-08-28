@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GitHub Releases manifest. The release-only backend serializes checks and
   installs, bounds release notes, reports download progress, verifies the
   embedded public key and keeps a failed pending update available for retry.
+- Advanced settings can manually check for a signed release, show its bounded
+  plain-text notes and download progress, then install and restart only after
+  explicit confirmation. Source builds clearly report that updater support is
+  release-only.
 - Model catalog entries now describe final/preview role, supported languages,
   relative runtime cost, and recommendation tags. Onboarding exposes language
   selection alongside every final local model, while onboarding and profile

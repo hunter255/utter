@@ -28,6 +28,7 @@ pub struct PlatformCapabilities {
     pub os: PlatformOs,
     pub modifier_only_hotkeys: bool,
     pub injection_methods: Vec<InjectionCapability>,
+    pub updater: bool,
 }
 
 pub fn capabilities() -> PlatformCapabilities {
@@ -55,18 +56,21 @@ fn for_os(os: PlatformOs) -> PlatformCapabilities {
                 InjectionCapability::Type,
                 ClipboardOnly,
             ],
+            updater: cfg!(feature = "updater"),
         },
         #[cfg(any(target_os = "macos", test))]
         PlatformOs::Macos => PlatformCapabilities {
             os,
             modifier_only_hotkeys: false,
             injection_methods: vec![Auto, ClipboardPaste, ClipboardOnly],
+            updater: cfg!(feature = "updater"),
         },
         #[cfg(any(not(any(target_os = "linux", target_os = "macos")), test))]
         PlatformOs::Other => PlatformCapabilities {
             os,
             modifier_only_hotkeys: false,
             injection_methods: vec![ClipboardOnly],
+            updater: cfg!(feature = "updater"),
         },
     }
 }
@@ -106,6 +110,7 @@ mod tests {
 
         assert_eq!(value["os"], "macos");
         assert_eq!(value["modifier_only_hotkeys"], false);
+        assert_eq!(value["updater"], cfg!(feature = "updater"));
         assert_eq!(
             value["injection_methods"],
             serde_json::json!(["auto", "clipboard_paste", "clipboard_only"])
