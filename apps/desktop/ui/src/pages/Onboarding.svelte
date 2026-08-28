@@ -3,10 +3,13 @@
   import { getCurrentWindow } from '@tauri-apps/api/window'
 
   import HotkeyPicker from '../lib/components/HotkeyPicker.svelte'
+  import Select from '../lib/components/Select.svelte'
   import * as api from '../lib/api'
   import { hasBaseKey, parseChordTokens } from '../lib/hotkey'
+  import { transcriptionModelOptions, transcriptionModels } from '../lib/models'
   import { settingsStore } from '../lib/stores'
   import type {
+    EngineCfg,
     ModelInfo,
     PermissionKind,
     PermissionReport,
@@ -61,11 +64,9 @@
   let busy = $state<Record<string, boolean>>({})
   let unlistenProgress: (() => void) | undefined
 
-  // The model step must offer whatever the default profile's own engine names, not a
-  // hardcoded engine -- `Settings::default()` seeds it on sherpa, but a hand-edited or migrated
-  // config can seed it on whisper (or cloud, which needs no local model at all). Offering the
-  // wrong engine's models here is how a fresh install completes onboarding and still can't
-  // dictate: the default profile's hotkey resolves to a model that was never downloaded.
+  // A fresh profile starts on sherpa, but onboarding is where users should be able to choose
+  // either final-transcript engine. Streaming preview models stay out of this list because they
+  // cannot replace the model whose text is inserted into the focused app.
   let profileEngine = $derived(settings.profiles[0]?.engine.active ?? 'whisper')
   let profileModelId = $derived(
     profileEngine === 'sherpa'
@@ -74,13 +75,37 @@
         ? settings.profiles[0]?.engine.whisper_model
         : null,
   )
-  let downloadableModels = $derived(models.filter((m) => m.engine === profileEngine))
-  // Deliberately checks the *specific* model id the default profile names, not merely "some
-  // model of the right engine is installed" -- a sherpa engine has two catalog models, and
-  // installing the wrong one would still let the (dishonest) old copy claim readiness.
-  let defaultModelInstalled = $derived(
-    profileModelId != null && models.some((m) => m.id === profileModelId && m.installed),
+  let localModels = $derived(transcriptionModels(models))
+  let modelPickerOptions = $derived([
+    {
+      value: '',
+      label: models.length === 0 ? 'Loading models…' : 'Choose a local model',
+    },
+    ...transcriptionModelOptions(models),
+  ])
+  let selectedModel = $derived(
+    localModels.find((model) => model.id === profileModelId) ?? null,
   )
+  let selectedModelInstalled = $derived(selectedModel?.installed ?? false)
+
+  function selectModel(id: string) {
+    if (!id) return
+
+    const model = localModels.find((candidate) => candidate.id === id)
+    const profile = settings.profiles[0]
+    if (!model || !profile) return
+
+    const engine: EngineCfg =
+      model.engine === 'whisper'
+        ? { ...profile.engine, active: 'whisper', whisper_model: model.id }
+        : { ...profile.engine, active: 'sherpa', sherpa_model: model.id }
+
+    settingsStore.patch({
+      profiles: settings.profiles.map((candidate, index) =>
+        index === 0 ? { ...candidate, engine } : candidate,
+      ),
+    })
+  }
 
   async function refreshModels() {
     try {
@@ -247,47 +272,65 @@
       {/if}
     {:else if step === 2}
       <h1>Speech model</h1>
-      {#if profileEngine === 'cloud'}
+      <p class="muted">
+        Choose the local model for your first profile. This switches both its engine and model;
+        you can change them later under Profiles.
+      </p>
+      <Select
+        id="onboarding-model"
+        options={modelPickerOptions}
+        disabled={models.length === 0}
+        bind:value={
+          () => (profileEngine === 'cloud' ? '' : (profileModelId ?? '')),
+          selectModel
+        }
+      />
+      {#if modelsError}
+        <p class="error">{modelsError}</p>
+      {/if}
+      {#if profileEngine === 'cloud' && !selectedModel}
         <p class="muted">
           Your default profile dictates through a cloud speech-to-text endpoint. Configure its
-          API key under Settings &gt; Engines after finishing setup — no model download is
-          needed here.
+          API key under Settings &gt; Engines after finishing setup, or choose a local model above.
         </p>
-      {:else}
-        <p class="muted">
-          Install the model your default profile uses ({profileModelId ?? 'none configured'}) to
-          get started (you can add more later).
-        </p>
-        {#if modelsError}
-          <p class="error">{modelsError}</p>
-        {/if}
+      {:else if selectedModel}
         <ul class="model-list">
-          {#each downloadableModels as model (model.id)}
-            <li>
-              <div class="model-row">
-                <div class="model-info">
-                  <span class="model-label">{model.label}</span>
-                  <span class="model-size">{model.size_mb} MB</span>
-                </div>
-                {#if model.installed}
-                  <span class="badge">Installed</span>
-                {:else}
-                  <button type="button" onclick={() => install(model.id)} disabled={busy[model.id]}>
-                    {busy[model.id] ? 'Downloading…' : 'Install'}
-                  </button>
-                {/if}
+          <li>
+            <div class="model-row">
+              <div class="model-info">
+                <span class="model-label">{selectedModel.label}</span>
+                <span class="model-size">
+                  {selectedModel.engine === 'whisper' ? 'Whisper' : 'Sherpa-onnx'} ·
+                  {selectedModel.size_mb} MB
+                </span>
               </div>
-              {#if busy[model.id]}
-                <div class="progress-track">
-                  <div class="progress-fill" style:width="{progressPercent(model.id) ?? 0}%"></div>
-                </div>
+              {#if selectedModel.installed}
+                <span class="badge">Installed</span>
+              {:else}
+                <button
+                  type="button"
+                  onclick={() => install(selectedModel.id)}
+                  disabled={busy[selectedModel.id]}
+                >
+                  {busy[selectedModel.id] ? 'Downloading…' : 'Install'}
+                </button>
               {/if}
-            </li>
-          {/each}
+            </div>
+            {#if busy[selectedModel.id]}
+              <div class="progress-track">
+                <div
+                  class="progress-fill"
+                  style:width="{progressPercent(selectedModel.id) ?? 0}%"
+                ></div>
+              </div>
+            {/if}
+          </li>
         </ul>
-        {#if defaultModelInstalled}
-          <p class="ok">Your default profile's model is installed — you're ready to dictate.</p>
+        {#if selectedModelInstalled}
+          <p class="ok">This model is installed — you're ready to dictate.</p>
         {/if}
+      {:else if models.length > 0}
+        <p class="warn">Choose a model before continuing if you want to dictate locally.</p>
       {/if}
     {:else if step === 3}
       <h1>Hotkey</h1>

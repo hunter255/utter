@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
-import { previewModelOptions, previewModels } from '../models'
+import {
+  previewModelOptions,
+  previewModels,
+  transcriptionModelOptions,
+  transcriptionModels,
+} from '../models'
 import type { ModelInfo } from '../types'
 
 /** `installed` is required rather than defaulted, because the picker's labels now depend on it:
@@ -28,6 +33,27 @@ describe('previewModels', () => {
     expect(previewModels(CATALOG).map((m) => m.id)).toEqual([
       'zipformer-ru-small',
       'zipformer-en-small',
+    ])
+  })
+})
+
+describe('transcriptionModels', () => {
+  it('offers both final transcript engines and excludes streaming previews', () => {
+    expect(transcriptionModels(CATALOG).map((m) => m.id)).toEqual([
+      'small',
+      'parakeet-tdt-110m-en',
+    ])
+  })
+})
+
+describe('transcriptionModelOptions', () => {
+  it('labels engine, size, and installed state without leaking preview models', () => {
+    expect(transcriptionModelOptions(CATALOG)).toEqual([
+      { value: 'small', label: 'Whisper — small label — 1 MB — installed' },
+      {
+        value: 'parakeet-tdt-110m-en',
+        label: 'Sherpa-onnx — parakeet-tdt-110m-en label — 1 MB — installed',
+      },
     ])
   })
 })
