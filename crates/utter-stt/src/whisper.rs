@@ -295,10 +295,7 @@ fn run_full_inference(
         raw_segments.push(segment_text.into_owned());
     }
     let text = join_speech_segments(raw_segments.iter().map(String::as_str));
-    let text = match decode.postprocess {
-        WhisperPostprocess::None => text,
-        WhisperPostprocess::BreezeBoundaryGlue => fix_breeze_boundary_glue(&text),
-    };
+    let text = postprocess_whisper_text(&text, decode.postprocess);
 
     let language = match &opts.language {
         Some(lang) => Some(lang.clone()),
@@ -378,6 +375,171 @@ fn join_speech_segments<'a>(raw_segments: impl Iterator<Item = &'a str>) -> Stri
         .filter(|trimmed| !trimmed.is_empty() && !is_non_speech_annotation(trimmed))
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Applies the conservative cleanup shared by every local Whisper model,
+/// followed by any model-specific text repair.
+///
+/// Hallucination cleanup deliberately runs before Breeze boundary repair:
+/// the former decides which complete sentences to keep, while the latter
+/// only repairs missing spaces in the text that survived.
+fn postprocess_whisper_text(text: &str, postprocess: WhisperPostprocess) -> String {
+    let text = remove_whisper_hallucinations(text);
+    match postprocess {
+        WhisperPostprocess::None => text,
+        WhisperPostprocess::BreezeBoundaryGlue => fix_breeze_boundary_glue(&text),
+    }
+}
+
+/// Removes two narrow classes of well-known Whisper hallucinations:
+/// subtitle-like phrases emitted as an entire sentence and consecutive
+/// sentence repetition loops.
+///
+/// When no sentence is removed, the input is returned byte-for-byte. This is
+/// important because the splitter is only a detector; it must not become a
+/// punctuation or whitespace formatter for ordinary dictation.
+fn remove_whisper_hallucinations(text: &str) -> String {
+    const LONG_DOUBLE_MIN_CHARS: usize = 24;
+
+    let sentences = split_whisper_sentences(text);
+    if sentences.is_empty() {
+        return text.to_string();
+    }
+
+    let analyzed = sentences
+        .iter()
+        .map(|sentence| {
+            let normalized = normalize_sentence(sentence);
+            let hallucination = is_known_hallucination_sentence(sentence, &normalized);
+            (*sentence, normalized, hallucination)
+        })
+        .collect::<Vec<_>>();
+
+    let mut keep = analyzed
+        .iter()
+        .map(|(_, _, hallucination)| !hallucination)
+        .collect::<Vec<_>>();
+    let mut run_start = 0;
+    while run_start < analyzed.len() {
+        if !keep[run_start] {
+            run_start += 1;
+            continue;
+        }
+
+        let normalized = &analyzed[run_start].1;
+        let mut run_end = run_start + 1;
+        while run_end < analyzed.len() && keep[run_end] && analyzed[run_end].1 == *normalized {
+            run_end += 1;
+        }
+
+        let run_len = run_end - run_start;
+        let collapse = !normalized.is_empty()
+            && (run_len >= 3
+                || (run_len == 2 && normalized.chars().count() >= LONG_DOUBLE_MIN_CHARS));
+        if collapse {
+            keep[(run_start + 1)..run_end].fill(false);
+        }
+        run_start = run_end;
+    }
+
+    let changed = keep.iter().any(|keep| !keep);
+    if !changed {
+        return text.to_string();
+    }
+
+    analyzed
+        .iter()
+        .zip(keep)
+        .filter(|(_, keep)| *keep)
+        .map(|((sentence, _, _), _)| sentence.trim())
+        .filter(|sentence| !sentence.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Splits on sentence-ending punctuation without allocating or changing the
+/// original slices. Besides whitespace-separated sentences, uppercase text
+/// after a terminator is accepted so Breeze output such as `текст.Следующий`
+/// can still be recognized before its missing space is repaired.
+fn split_whisper_sentences(text: &str) -> Vec<&str> {
+    let mut sentences = Vec::new();
+    let mut sentence_start = 0;
+    let mut chars = text.char_indices().peekable();
+
+    while let Some((index, ch)) = chars.next() {
+        if !is_sentence_terminator(ch) {
+            continue;
+        }
+
+        let mut sentence_end = index + ch.len_utf8();
+        while let Some(&(next_index, next)) = chars.peek() {
+            if !is_sentence_terminator(next) && !is_sentence_closer(next) {
+                break;
+            }
+            chars.next();
+            sentence_end = next_index + next.len_utf8();
+        }
+
+        let is_boundary = chars.peek().is_none_or(|&(_, next)| {
+            next.is_whitespace() || next.is_uppercase() || is_cjk_sentence_terminator(ch)
+        });
+        if is_boundary {
+            sentences.push(&text[sentence_start..sentence_end]);
+            sentence_start = sentence_end;
+        }
+    }
+
+    if sentence_start < text.len() {
+        sentences.push(&text[sentence_start..]);
+    }
+    sentences
+}
+
+fn is_sentence_terminator(ch: char) -> bool {
+    matches!(ch, '.' | '!' | '?' | '…' | '。' | '！' | '？')
+}
+
+fn is_cjk_sentence_terminator(ch: char) -> bool {
+    matches!(ch, '。' | '！' | '？')
+}
+
+fn is_sentence_closer(ch: char) -> bool {
+    matches!(ch, '\'' | '"' | '’' | '”' | '»' | ')' | ']' | '}')
+}
+
+/// Produces a comparison key only. The original sentence is retained for
+/// output, so lowercasing and whitespace folding cannot alter real speech.
+fn normalize_sentence(sentence: &str) -> String {
+    sentence
+        .trim()
+        .trim_matches(|ch: char| !ch.is_alphanumeric())
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn is_known_hallucination_sentence(sentence: &str, normalized: &str) -> bool {
+    const SUBTITLE_PHRASES: [&str; 7] = [
+        "продолжение следует",
+        "спасибо за просмотр",
+        "субтитры сделал dimatorzok",
+        "субтитры создавал dimatorzok",
+        "thanks for watching",
+        "thank you for watching",
+        "please subscribe",
+    ];
+
+    if SUBTITLE_PHRASES.contains(&normalized) {
+        return true;
+    }
+
+    let without_sentence_punctuation = sentence
+        .trim()
+        // Keep `]` and `)` because they may close the annotation itself.
+        .trim_end_matches(is_sentence_terminator)
+        .trim_end();
+    is_non_speech_annotation(without_sentence_punctuation)
 }
 
 /// Repairs sentence/word boundaries Breeze-ASR-25 can omit around Cyrillic
@@ -607,6 +769,79 @@ mod tests {
     fn join_speech_segments_trims_and_drops_empty_segments() {
         let joined = join_speech_segments(["  hello  ", "", "   "].into_iter());
         assert_eq!(joined, "hello");
+    }
+
+    #[test]
+    fn hallucination_cleanup_collapses_classic_repetition_loop() {
+        assert_eq!(
+            remove_whisper_hallucinations("Покажу. Покажу. Покажу. Покажу."),
+            "Покажу."
+        );
+        assert_eq!(
+            remove_whisper_hallucinations("Покажу.Покажу.Покажу."),
+            "Покажу."
+        );
+    }
+
+    #[test]
+    fn hallucination_cleanup_handles_unicode_sentence_terminators() {
+        assert_eq!(
+            remove_whisper_hallucinations("続く。続く。続く。"),
+            "続く。"
+        );
+    }
+
+    #[test]
+    fn hallucination_cleanup_collapses_long_double_but_keeps_short_emphasis() {
+        assert_eq!(
+            remove_whisper_hallucinations(
+                "Это достаточно длинное предложение. Это достаточно длинное предложение."
+            ),
+            "Это достаточно длинное предложение."
+        );
+        assert_eq!(remove_whisper_hallucinations("Да. Да."), "Да. Да.");
+    }
+
+    #[test]
+    fn hallucination_cleanup_removes_only_exact_known_sentences() {
+        assert_eq!(
+            remove_whisper_hallucinations("Привет. Спасибо за просмотр! Пока."),
+            "Привет. Пока."
+        );
+        assert_eq!(remove_whisper_hallucinations("Thank you for watching."), "");
+        assert_eq!(remove_whisper_hallucinations("[silence]."), "");
+
+        let legitimate = "Он сказал «спасибо за просмотр», но продолжил запись.";
+        assert_eq!(remove_whisper_hallucinations(legitimate), legitimate);
+    }
+
+    #[test]
+    fn hallucination_cleanup_does_not_join_repetition_runs_across_removed_text() {
+        let text = "Это достаточно длинное предложение. Спасибо за просмотр. Это достаточно длинное предложение.";
+        assert_eq!(
+            remove_whisper_hallucinations(text),
+            "Это достаточно длинное предложение. Это достаточно длинное предложение."
+        );
+    }
+
+    #[test]
+    fn hallucination_cleanup_preserves_ordinary_text_byte_for_byte() {
+        let text = "  Это нормальный текст!  \n\n«Да?» — ответил он.  API.SDK работает…  ";
+        assert_eq!(
+            remove_whisper_hallucinations(text).as_bytes(),
+            text.as_bytes()
+        );
+    }
+
+    #[test]
+    fn shared_cleanup_runs_before_breeze_boundary_repair() {
+        assert_eq!(
+            postprocess_whisper_text(
+                "Покажу.Покажу.Покажу. словоHello.",
+                WhisperPostprocess::BreezeBoundaryGlue,
+            ),
+            "Покажу. слово Hello."
+        );
     }
 
     #[test]
