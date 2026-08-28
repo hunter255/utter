@@ -91,6 +91,15 @@ export function openPermissionSettings(kind: PermissionKind): Promise<void> {
   return invoke('open_permission_settings', { kind })
 }
 
+export function openLogs(): Promise<void> {
+  return invoke('open_logs')
+}
+
+/** Builds the safe report; the caller writes the returned text to clipboard. */
+export function copyDiagnostics(): Promise<string> {
+  return invoke('copy_diagnostics')
+}
+
 export function platformCapabilities(): Promise<PlatformCapabilities> {
   return invoke('platform_capabilities')
 }

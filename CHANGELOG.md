@@ -33,6 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Credentials, URL queries, and personal home paths are redacted before a
   line reaches disk; an unwritable log directory degrades to console logging
   and a notice instead of stopping startup.
+- Advanced settings can open the log folder or copy an allowlisted diagnostic
+  report. It includes app/platform facts, engine/model IDs, safe permission
+  states and at most 200 redacted log lines, but no full settings dump,
+  transcript, prompt, dictionary, provider endpoint, profile name or reset
+  command; nothing is sent automatically.
 
 ### Changed
 

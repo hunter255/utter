@@ -21,10 +21,11 @@ tauri-plugin-autostart = "2"
 tauri-plugin-notification = "2"
 keyring = "4"
 regex = "1"
+serde_json = { workspace = true }
 tracing = { workspace = true }
 # `fmt` + `std` only: the app maps `advanced.log_level` straight to a max
 # level (see `init_tracing`), so `env-filter` is unnecessary. The writer is
-# the bounded/redacting implementation in `diagnostics.rs`.
+# the bounded/redacting implementation in `logging.rs`.
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
 
 utter-core = { path = "../../../crates/utter-core" }
@@ -56,5 +57,4 @@ sherpa = ["utter-stt/sherpa"]
 whisper-metal = ["utter-stt/whisper-metal"]
 
 [dev-dependencies]
-serde_json = { workspace = true }
 tempfile = "3"

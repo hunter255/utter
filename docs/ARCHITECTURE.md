@@ -262,3 +262,8 @@ partial and has no state for one.
   rather than depending on an invisible GUI stderr stream. Credential-like
   fields, URL queries and the user's home prefix are removed before disk I/O;
   failure to create the directory falls back to stderr without aborting boot.
+- **Diagnostic reports use an allowlist, not a settings dump** — the copied
+  JSON is assembled from version/platform data, compiled Metal support,
+  engine/model IDs, safe permission states and at most 200 redacted log lines.
+  Profile names, prompts, dictionary terms, provider endpoints, reset commands
+  and all other settings have no serialization path into the report.

@@ -87,7 +87,8 @@ endpoint, a model download).
   reconciled with the saved preference on every app start.
 - **Persistent diagnostics** — GUI launches keep a small bounded set of local
   log files, with credentials, URL queries and the personal home path
-  redacted before each line reaches disk.
+  redacted before each line reaches disk. Advanced settings can open the log
+  folder or copy an allowlisted report; nothing is uploaded automatically.
 
 ## Screenshots
 
@@ -295,6 +296,8 @@ rejected, so the format tolerates being hand-edited or partially upgraded.
 - **Diagnostics** — logs live under the platform app-data directory in
   `logs/`, rotate at roughly 1 MiB each, and keep at most four files.
   Increasing `advanced.log_level` changes how much a future launch records.
+  The Advanced page can open the directory or copy a bounded report containing
+  only app/platform facts, model IDs, permission states and redacted log lines.
 - **Dictionary and snippets** — custom terms and replacement rules live
   under `[dictionary]`; snippets are a list of trigger/body pairs under
   `[[snippets]]`. Both are editable from the settings UI.
@@ -307,6 +310,7 @@ rejected, so the format tolerates being hand-edited or partially upgraded.
 - No telemetry, no analytics, no background network calls. The only network
   traffic Utter ever makes is to the STT/refinement endpoint you configure
   and to fetch model files you explicitly download.
+- Diagnostic reports stay local until you explicitly copy and share one.
 
 ## Architecture
 

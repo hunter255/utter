@@ -53,6 +53,9 @@
   let microphoneResetCommand = $state('')
   let permissionBusy = $state(false)
   let permissionError = $state('')
+  let diagnosticsBusy = $state<'open' | 'copy' | null>(null)
+  let diagnosticsMessage = $state('')
+  let diagnosticsError = $state('')
 
   async function refreshMicrophonePermission() {
     if (capabilities.os !== 'macos') return
@@ -81,6 +84,35 @@
       permissionError = String(err)
     } finally {
       permissionBusy = false
+    }
+  }
+
+  async function openLogs() {
+    diagnosticsBusy = 'open'
+    diagnosticsMessage = ''
+    diagnosticsError = ''
+    try {
+      await api.openLogs()
+      diagnosticsMessage = 'Opened the log folder.'
+    } catch (err) {
+      diagnosticsError = String(err)
+    } finally {
+      diagnosticsBusy = null
+    }
+  }
+
+  async function copyDiagnostics() {
+    diagnosticsBusy = 'copy'
+    diagnosticsMessage = ''
+    diagnosticsError = ''
+    try {
+      const report = await api.copyDiagnostics()
+      await navigator.clipboard.writeText(report)
+      diagnosticsMessage = 'Safe diagnostic report copied.'
+    } catch (err) {
+      diagnosticsError = String(err)
+    } finally {
+      diagnosticsBusy = null
     }
   }
 
@@ -214,6 +246,24 @@
       }
     />
   </Field>
+  <Field
+    label="Diagnostics"
+    hint="The report excludes API keys, transcripts, prompts, dictionary terms, endpoints, and personal paths. Nothing is sent automatically."
+  >
+    <div class="diagnostic-actions">
+      <button type="button" onclick={openLogs} disabled={diagnosticsBusy !== null}>
+        {diagnosticsBusy === 'open' ? 'Opening…' : 'Open logs'}
+      </button>
+      <button type="button" onclick={copyDiagnostics} disabled={diagnosticsBusy !== null}>
+        {diagnosticsBusy === 'copy' ? 'Copying…' : 'Copy safe report'}
+      </button>
+    </div>
+    {#if diagnosticsError}
+      <p class="error">{diagnosticsError}</p>
+    {:else if diagnosticsMessage}
+      <p class="ok">{diagnosticsMessage}</p>
+    {/if}
+  </Field>
 </Section>
 
 <style>
@@ -234,6 +284,12 @@
 
   .ok {
     color: var(--success);
+  }
+
+  .diagnostic-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
   }
 
 </style>

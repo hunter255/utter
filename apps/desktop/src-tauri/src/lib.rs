@@ -4,6 +4,7 @@
 
 mod autostart;
 mod commands;
+mod diagnostics;
 /// Event payload shapes shared with the frontend.
 pub mod events;
 mod logging;
@@ -195,6 +196,8 @@ pub fn run() -> Result<(), String> {
             commands::permissions_report,
             commands::request_permission,
             commands::open_permission_settings,
+            commands::open_logs,
+            commands::copy_diagnostics,
             commands::platform_capabilities,
             commands::test_refine,
             commands::cancel_dictation,
