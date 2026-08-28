@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Servers that ignore Range restart safely, malformed range responses and
   checksum failures discard the suspect partial, and connect/no-progress
   timeouts turn a silent network stall into an actionable retry.
+- Hugging Face model artifacts fall back to the catalogued `hf-mirror.com`
+  endpoint after the primary source fails. The app names the fallback before
+  using it, carries compatible partial bytes across sources, and still
+  requires the original catalog size and SHA-256 before installation.
 
 ### Changed
 

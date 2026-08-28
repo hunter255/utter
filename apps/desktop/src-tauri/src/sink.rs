@@ -86,6 +86,12 @@ pub(crate) fn notify_warning(app: &AppHandle, message: &str) {
     TauriEventSink::new(app.clone()).notify("warning", message);
 }
 
+/// Reports an informational fallback that changes how a user-initiated
+/// operation proceeds but does not make it fail.
+pub(crate) fn notify_info(app: &AppHandle, message: &str) {
+    TauriEventSink::new(app.clone()).notify("info", message);
+}
+
 /// Marks the HUD as a `Notification`-type window at the GTK level (see
 /// module docs for why `tauri.conf.json`'s `focusable: false` alone is not
 /// enough on GNOME/Wayland/Mutter). Called once from `setup`; logs and
