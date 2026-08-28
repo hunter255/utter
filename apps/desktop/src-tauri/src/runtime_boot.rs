@@ -570,8 +570,9 @@ const DRAFT_THREADS: usize = if cfg!(all(target_os = "macos", target_arch = "aar
     1
 };
 
-/// T-One's deliberately conservative inference budget until its latency and
-/// accuracy have been measured on the same corpus as the Zipformer previews.
+/// T-One's deliberately conservative inference budget. One thread remained
+/// comfortably real-time on the Apple Silicon benchmark while leaving the
+/// final transcription engine maximum headroom.
 #[cfg(feature = "sherpa")]
 const T_ONE_DRAFT_THREADS: usize = 1;
 

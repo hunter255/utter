@@ -55,6 +55,11 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": {
+      "../../../LICENSE-APACHE": "licenses/Apache-2.0.txt",
+      "../../../LICENSE-MIT": "licenses/MIT.txt",
+      "../../../THIRD_PARTY_NOTICES.md": "licenses/THIRD_PARTY_NOTICES.md"
+    },
     "macOS": {
       "entitlements": "Entitlements.plist"
     }

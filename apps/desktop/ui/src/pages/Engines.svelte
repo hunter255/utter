@@ -210,7 +210,7 @@
   </ul>
 </Section>
 
-<Section title="Live preview models" description="Small streaming models that show words in the HUD while you speak. They are fast rather than accurate and emit no punctuation, so they never produce the text that gets inserted. Which model a profile previews with is set on the Profiles page.">
+<Section title="Live preview models" description="Streaming models show provisional words in the HUD while you speak. They trade size, latency, and accuracy differently and may omit punctuation; their text is never inserted. Choose one per profile on the Profiles page.">
   <ul class="model-list">
     {#each streamingModels as model (model.id)}
       <li>
