@@ -16,6 +16,9 @@ export type EngineKind = 'whisper' | 'cloud' | 'sherpa'
 /** `crates/utter-core/src/types.rs::Tone` */
 export type Tone = 'verbatim' | 'clean' | 'formal' | 'notes' | 'code_comment'
 
+/** `crates/utter-store/src/profile.rs::RecognitionPromptMode` */
+export type RecognitionPromptMode = 'recommended' | 'disabled' | 'custom'
+
 /** `crates/utter-store/src/settings.rs::InjectionPreference` */
 export type InjectionPreference = 'auto' | 'clipboard_paste' | 'type' | 'clipboard_only'
 
@@ -70,6 +73,12 @@ export interface DraftCfg {
   model: string
 }
 
+/** `crates/utter-store/src/profile.rs::RecognitionCfg` */
+export interface RecognitionCfg {
+  prompt_mode: RecognitionPromptMode
+  custom_prompt: string
+}
+
 /** `crates/utter-store/src/profile.rs::LanguageProfile`. One hotkey chord
  * and everything dictating in it implies: which engine transcribes, which
  * model it loads, and whether the transcript is refined afterwards. */
@@ -79,6 +88,7 @@ export interface LanguageProfile {
   language: string
   engine: EngineCfg
   draft: DraftCfg | null
+  recognition: RecognitionCfg
   refine: RefinePolicy
 }
 
@@ -186,6 +196,10 @@ export function defaultSettings(): Settings {
           },
         },
         draft: null,
+        recognition: {
+          prompt_mode: 'recommended',
+          custom_prompt: '',
+        },
         refine: {
           enabled: false,
           tone: 'clean',

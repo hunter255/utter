@@ -77,6 +77,7 @@ describe('Settings type/JSON round-trip', () => {
             },
           },
           draft: { model: 'zipformer-ru-small' },
+          recognition: { prompt_mode: 'disabled', custom_prompt: '' },
           refine: { enabled: false, tone: 'clean' },
         },
         {
@@ -93,6 +94,10 @@ describe('Settings type/JSON round-trip', () => {
             },
           },
           draft: null,
+          recognition: {
+            prompt_mode: 'custom',
+            custom_prompt: 'Keep English API names in Latin script.',
+          },
           refine: { enabled: true, tone: 'formal' },
         },
       ],
@@ -149,6 +154,7 @@ describe('defaultSettings', () => {
             cloud: { base_url: 'https://api.openai.com/v1', model: 'whisper-1' },
           },
           draft: null,
+          recognition: { prompt_mode: 'recommended', custom_prompt: '' },
           refine: { enabled: false, tone: 'clean' },
         },
       ],

@@ -186,7 +186,7 @@ impl ActiveCapture for RealActiveCapture {
 /// everything [`RuntimeHandle::reload`] can swap out for the next one.
 ///
 /// Fields that used to live here directly (`engine`, `refiner`, `refine_enabled`, `tone`,
-/// `language`, `engine_label`, `dictionary_terms`) are now per-profile instead of per-runtime —
+/// `language`, `engine_label`, `initial_prompt`) are now per-profile instead of per-runtime —
 /// see [`profiles`] — because a hotkey binding selects a [`LanguageProfile`], not a single global
 /// engine/refiner pair. `profiles` is the only field that changed; everything else here is a
 /// true singleton shared by every profile (the hotkey receiver, the history connection, the
@@ -665,14 +665,9 @@ fn start_capture(ctx: &mut WorkerCtx) {
         .silence
         .map(|hold| SilenceDetector::new(ctx.vad_sensitivity, hold));
 
-    let (language, dictionary_terms) = {
+    let (language, initial_prompt) = {
         let deps = active_profile(ctx);
-        (deps.language.clone(), deps.dictionary_terms.clone())
-    };
-    let initial_prompt = if dictionary_terms.is_empty() {
-        None
-    } else {
-        Some(dictionary_terms.join(", "))
+        (deps.language.clone(), deps.initial_prompt.clone())
     };
     let opts = TranscribeOptions {
         language,
