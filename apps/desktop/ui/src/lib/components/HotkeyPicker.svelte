@@ -48,7 +48,7 @@
       if (requireBaseKey && !hasBaseKey(candidate)) {
         capturing = false
         preview = ''
-        hint = 'Add a letter, number, function key, or Space'
+        hint = 'Add a letter, number, function key, Space, `, or Insert'
         down = new Set()
         combo = new Set()
         return

@@ -200,6 +200,20 @@ mod tests {
     }
 
     #[test]
+    fn preparation_accepts_backquote_and_insert_shortcuts() {
+        let specs = [
+            parse_hotkey("backquote").unwrap(),
+            parse_hotkey("alt+insert").unwrap(),
+        ];
+        let prepared = prepare(&specs, &ids(&["backquote", "insert"])).unwrap();
+
+        let backquote: Shortcut = "Backquote".parse().unwrap();
+        let insert: Shortcut = "alt+Insert".parse().unwrap();
+        assert_eq!(prepared[0].shortcut.id(), backquote.id());
+        assert_eq!(prepared[1].shortcut.id(), insert.id());
+    }
+
+    #[test]
     fn preparation_rejects_modifier_only_and_duplicate_chords() {
         let modifier_only = [parse_hotkey("ctrl+super").unwrap()];
         assert!(prepare(&modifier_only, &ids(&["en"]))

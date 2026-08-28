@@ -129,6 +129,11 @@ pub(crate) enum Key {
     /// `Char` since it is not alphanumeric and needs its own evdev/X11
     /// key-code resolution (`KEY_SPACE` / `Code::Space`).
     Space,
+    /// The physical key immediately left of `1`, independent of whether the
+    /// active layout emits backquote, tilde, or `ё`.
+    Backquote,
+    /// The Insert key found on PC-style and some external Mac keyboards.
+    Insert,
 }
 
 impl Key {
@@ -155,8 +160,8 @@ impl HotkeySpec {
         self.tokens.iter()
     }
 
-    /// True if every token in the chord is a modifier (no letter, digit, or
-    /// function key). Modifier-only chords are supported by the evdev
+    /// True if every token in the chord is a modifier (no base key).
+    /// Modifier-only chords are supported by the evdev
     /// backend but not by the X11 (`global-hotkey`) fallback, which always
     /// requires a non-modifier base key.
     pub fn is_modifier_only(&self) -> bool {
@@ -193,6 +198,8 @@ impl HotkeySpec {
             Key::Char(c) => format!("Key{}", c.to_ascii_uppercase()),
             Key::Function(n) => format!("F{n}"),
             Key::Space => "Space".to_string(),
+            Key::Backquote => "Backquote".to_string(),
+            Key::Insert => "Insert".to_string(),
             Key::Ctrl | Key::Alt | Key::Shift | Key::Super => unreachable!(),
         });
 
@@ -204,8 +211,8 @@ impl HotkeySpec {
 /// shortcut APIs.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum HotkeyShortcutError {
-    /// The platform API requires a normal base key in addition to modifiers.
-    #[error("modifier-only hotkeys are not supported on this platform; add a letter, digit, function key, or Space")]
+    /// The platform API requires a normal base key; modifiers are optional.
+    #[error("modifier-only hotkeys are not supported on this platform; add a letter, digit, function key, Space, Backquote, or Insert")]
     ModifierOnly,
 }
 
@@ -215,12 +222,11 @@ pub enum HotkeyParseError {
     /// The specification had no tokens at all (e.g. `""` or `"+"`).
     #[error("empty hotkey specification")]
     Empty,
-    /// A token was not a recognized modifier, letter, digit, or function key.
+    /// A token was not a recognized modifier or base key.
     #[error("unknown hotkey token: {0:?}")]
     UnknownToken(String),
-    /// More than one letter, digit, or function key was given; a chord has
-    /// at most one base key.
-    #[error("hotkey chord may have at most one base key (letter, digit, or function key)")]
+    /// More than one base key was given; a chord has at most one.
+    #[error("hotkey chord may have at most one base key")]
     MultipleBaseKeys,
 }
 
@@ -229,8 +235,8 @@ pub enum HotkeyParseError {
 ///
 /// Tokens are case-insensitive. Recognized modifier names: `ctrl`/`control`,
 /// `alt`, `shift`, `super`/`meta`/`win`. A single letter, single digit,
-/// `f1`..`f24`, or `space` is accepted as the (at most one) base key — a
-/// second one (e.g. `"a+b"`) is rejected with
+/// `f1`..`f24`, `space`, `backquote`, or `insert` is accepted as the (at most
+/// one) base key — a second one (e.g. `"a+b"`) is rejected with
 /// [`HotkeyParseError::MultipleBaseKeys`]. A chord made up entirely of
 /// modifiers is valid (see [`HotkeySpec::is_modifier_only`]).
 pub fn parse_hotkey(s: &str) -> Result<HotkeySpec, HotkeyParseError> {
@@ -271,6 +277,8 @@ fn parse_token(token: &str) -> Result<Key, HotkeyParseError> {
         "shift" => return Ok(Key::Shift),
         "super" | "meta" | "win" => return Ok(Key::Super),
         "space" => return Ok(Key::Space),
+        "backquote" | "`" | "~" => return Ok(Key::Backquote),
+        "insert" | "ins" => return Ok(Key::Insert),
         _ => {}
     }
 
@@ -604,6 +612,22 @@ mod tests {
     }
 
     #[test]
+    fn parses_backquote_and_insert_as_base_keys() {
+        for alias in ["backquote", "`", "~"] {
+            assert_eq!(
+                parse_hotkey(alias).unwrap().tokens,
+                HashSet::from([Key::Backquote])
+            );
+        }
+        for alias in ["insert", "ins"] {
+            assert_eq!(
+                parse_hotkey(alias).unwrap().tokens,
+                HashSet::from([Key::Insert])
+            );
+        }
+    }
+
+    #[test]
     fn canonical_shortcut_has_stable_modifier_and_key_order() {
         let spec = parse_hotkey("meta+shift+control+alt+d").expect("valid chord");
         assert_eq!(
@@ -628,6 +652,20 @@ mod tests {
                 .canonical_shortcut()
                 .unwrap(),
             "super+Space"
+        );
+        assert_eq!(
+            parse_hotkey("backquote")
+                .unwrap()
+                .canonical_shortcut()
+                .unwrap(),
+            "Backquote"
+        );
+        assert_eq!(
+            parse_hotkey("alt+insert")
+                .unwrap()
+                .canonical_shortcut()
+                .unwrap(),
+            "alt+Insert"
         );
     }
 
