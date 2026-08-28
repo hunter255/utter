@@ -7,19 +7,22 @@
 //! whisper model is a single `.bin` file, and a model with several artifacts
 //! (e.g. a sherpa-onnx transducer's encoder, decoder, joiner and tokens) is
 //! installed as a directory holding all of them. Each artifact streams to
-//! its own `.part` file while its sha256 is computed incrementally, and a
+//! its own resumable `.part` file while its sha256 is computed incrementally, and a
 //! model only becomes visible at its final path once every one of its
-//! artifacts has verified — a checksum mismatch or an interrupted download
-//! always leaves the staging area cleaned up rather than reporting a
-//! half-installed model.
+//! artifacts has verified. Cancellation and transport failures preserve a
+//! partial for the next attempt; invalid ranges and checksum failures remove
+//! it. Neither case can expose a half-installed model.
 
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
+use reqwest::header::{CONTENT_RANGE, RANGE};
+use reqwest::StatusCode;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -54,6 +57,28 @@ impl DownloadCancellation {
 #[derive(Debug, thiserror::Error)]
 #[error("model download cancelled")]
 pub struct DownloadCancelled;
+
+/// A response was established but stopped yielding body bytes. Keeping this
+/// error distinct makes the desktop message actionable while the resumable
+/// `.part` remains available for a retry.
+#[derive(Debug, thiserror::Error)]
+#[error("model download stalled for {seconds} seconds; retry to resume")]
+pub struct DownloadStalled {
+    seconds: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DownloadTimeouts {
+    connect: Duration,
+    stall: Duration,
+}
+
+const DOWNLOAD_TIMEOUTS: DownloadTimeouts = DownloadTimeouts {
+    connect: Duration::from_secs(20),
+    stall: Duration::from_secs(30),
+};
+
+const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Where a model's output is used in the dictation pipeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -510,8 +535,8 @@ impl ModelManager {
 
     /// Downloads and installs the model identified by `id`.
     ///
-    /// Each artifact's response body streams into a `.part` file inside a
-    /// fresh staging area while its sha256 is computed incrementally;
+    /// Each artifact's response body streams into a resumable `.part` file
+    /// inside a staging area while its sha256 is computed incrementally;
     /// `progress(done, total)` is called after every chunk of every artifact,
     /// with `total` the catalog's grand total across every artifact in the
     /// entry (known upfront from each artifact's `size_bytes`, independent of
@@ -519,9 +544,10 @@ impl ModelManager {
     /// cumulatively across artifacts, never resetting to zero partway through
     /// a multi-artifact model. An artifact's digest is checked against its
     /// catalog sha256 as soon as it finishes downloading: on the first
-    /// mismatch, or if any body is interrupted, the whole staging area is
-    /// removed and an error returned, so no half-downloaded model is ever
-    /// left where [`Self::path_for`] would find it.
+    /// mismatch removes that artifact's partial. Cancellation and transport
+    /// failures keep valid bytes for a later Range request. The staging area
+    /// is outside [`Self::path_for`], so no half-downloaded model can report
+    /// as installed.
     ///
     /// Only once every artifact has verified does the model become visible
     /// at its final path: a single-artifact model (e.g. whisper) is renamed
@@ -572,7 +598,14 @@ impl ModelManager {
 
         cancellation.check()?;
         let staging_dir = models_dir.join(format!("{}.staging", entry.id));
-        let _ = fs::remove_dir_all(&staging_dir);
+        if staging_dir.is_file() {
+            fs::remove_file(&staging_dir).with_context(|| {
+                format!(
+                    "failed to replace invalid staging file {}",
+                    staging_dir.display()
+                )
+            })?;
+        }
         fs::create_dir_all(&staging_dir)
             .with_context(|| format!("failed to create {}", staging_dir.display()))?;
 
@@ -586,16 +619,16 @@ impl ModelManager {
         let grand_total: u64 = entry.artifacts.iter().map(|a| a.size_bytes).sum();
         let mut completed: u64 = 0;
         for artifact in entry.artifacts {
-            if let Err(error) = cancellation.check() {
-                let _ = fs::remove_dir_all(&staging_dir);
-                return Err(error);
-            }
+            cancellation.check()?;
             let mut aggregate = |done: u64, _total: u64| progress(completed + done, grand_total);
-            if let Err(err) =
+            if let Err(error) =
                 stage_one_artifact(id, artifact, &staging_dir, cancellation, &mut aggregate)
             {
-                let _ = fs::remove_dir_all(&staging_dir);
-                return Err(err);
+                // Remove only an empty directory. A transport failure or
+                // cancellation leaves a `.part`; previously verified
+                // artifacts of a multi-file model also remain resumable.
+                let _ = fs::remove_dir(&staging_dir);
+                return Err(error);
             }
             completed += artifact.size_bytes;
             // One explicit boundary callback lets an owner cancel after a
@@ -607,10 +640,7 @@ impl ModelManager {
             }
         }
 
-        if let Err(error) = cancellation.check() {
-            let _ = fs::remove_dir_all(&staging_dir);
-            return Err(error);
-        }
+        cancellation.check()?;
 
         let final_path = self.install_path(entry);
         if entry.artifacts.len() > 1 {
@@ -659,6 +689,15 @@ impl ModelManager {
         } else if path.is_file() {
             fs::remove_file(&path)
                 .with_context(|| format!("failed to remove file {}", path.display()))?;
+        }
+
+        let staging = self.models_dir().join(format!("{}.staging", entry.id));
+        if staging.is_dir() {
+            fs::remove_dir_all(&staging)
+                .with_context(|| format!("failed to remove directory {}", staging.display()))?;
+        } else if staging.is_file() {
+            fs::remove_file(&staging)
+                .with_context(|| format!("failed to remove file {}", staging.display()))?;
         }
 
         Ok(())
@@ -764,8 +803,8 @@ fn artifact_path(entry: &CatalogEntry, install_path: &Path, artifact: &Artifact)
 }
 
 /// Downloads and verifies one artifact into `staging_dir`, leaving it at
-/// `staging_dir/<artifact.name>` on success. The `.part` suffix is only used
-/// while the body is in flight and the checksum is unconfirmed.
+/// `staging_dir/<artifact.name>` on success. Verified artifacts from a prior
+/// interrupted multi-file download are reused without another request.
 fn stage_one_artifact(
     id: &str,
     artifact: &Artifact,
@@ -774,9 +813,46 @@ fn stage_one_artifact(
     progress: &mut dyn FnMut(u64, u64),
 ) -> Result<()> {
     let part_path = staging_dir.join(format!("{}.part", artifact.name));
-    let digest =
-        stream_to_part_with_cancellation(artifact.url, &part_path, cancellation, progress)?;
+    let final_in_staging = staging_dir.join(artifact.name);
+
+    if final_in_staging.is_dir() {
+        fs::remove_dir_all(&final_in_staging).with_context(|| {
+            format!(
+                "failed to remove invalid staged directory {}",
+                final_in_staging.display()
+            )
+        })?;
+    } else if final_in_staging.is_file() {
+        let (digest, size) = hash_file(&final_in_staging, cancellation)?;
+        if size == artifact.size_bytes && digest == artifact.sha256 {
+            let _ = fs::remove_file(&part_path);
+            progress(size, artifact.size_bytes);
+            return Ok(());
+        }
+
+        tracing::warn!(
+            model = id,
+            artifact = artifact.name,
+            "discarding an invalid previously staged artifact"
+        );
+        fs::remove_file(&final_in_staging).with_context(|| {
+            format!(
+                "failed to remove invalid staged artifact {}",
+                final_in_staging.display()
+            )
+        })?;
+    }
+
+    let digest = stream_to_part_with_cancellation(
+        artifact.url,
+        &part_path,
+        artifact.size_bytes,
+        cancellation,
+        DOWNLOAD_TIMEOUTS,
+        progress,
+    )?;
     if digest != artifact.sha256 {
+        let _ = fs::remove_file(&part_path);
         bail!(
             "checksum mismatch for model '{id}' artifact '{}': expected {}, got {digest}",
             artifact.name,
@@ -784,7 +860,6 @@ fn stage_one_artifact(
         );
     }
 
-    let final_in_staging = staging_dir.join(artifact.name);
     fs::rename(&part_path, &final_in_staging).with_context(|| {
         format!(
             "failed to move {} into {}",
@@ -794,60 +869,311 @@ fn stage_one_artifact(
     })
 }
 
-/// Streams the HTTP body at `url` into `part_path`, reporting `(done,
-/// total)` progress as chunks arrive, and returns the hex-encoded sha256 of
-/// the bytes received.
+/// Streams the HTTP body at `url` into `part_path`, reporting progress against
+/// the catalog's expected size and returning the full file's sha256. Existing
+/// valid-length bytes are hashed and continued with a Range request.
 #[cfg(test)]
 fn stream_to_part(
     url: &str,
     part_path: &Path,
+    expected_size: u64,
     progress: &mut dyn FnMut(u64, u64),
 ) -> Result<String> {
-    stream_to_part_with_cancellation(url, part_path, &DownloadCancellation::default(), progress)
+    stream_to_part_with_cancellation(
+        url,
+        part_path,
+        expected_size,
+        &DownloadCancellation::default(),
+        DOWNLOAD_TIMEOUTS,
+        progress,
+    )
 }
 
 fn stream_to_part_with_cancellation(
     url: &str,
     part_path: &Path,
+    expected_size: u64,
     cancellation: &DownloadCancellation,
+    timeouts: DownloadTimeouts,
     progress: &mut dyn FnMut(u64, u64),
 ) -> Result<String> {
     cancellation.check()?;
-    let mut response =
-        reqwest::blocking::get(url).with_context(|| format!("failed to request {url}"))?;
-    cancellation.check()?;
-    if !response.status().is_success() {
-        bail!("download of {url} failed with status {}", response.status());
+
+    if part_path.is_dir() {
+        fs::remove_dir_all(part_path)
+            .with_context(|| format!("failed to remove invalid partial {}", part_path.display()))?;
     }
-    let total = response.content_length().unwrap_or(0);
 
-    let mut file = File::create(part_path)
-        .with_context(|| format!("failed to create {}", part_path.display()))?;
+    let mut resume_from = match fs::metadata(part_path) {
+        Ok(metadata) => metadata.len(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to inspect partial {}", part_path.display()));
+        }
+    };
+    if resume_from > expected_size {
+        tracing::warn!(
+            path = %part_path.display(),
+            actual = resume_from,
+            expected = expected_size,
+            "discarding oversized partial model artifact"
+        );
+        fs::remove_file(part_path)
+            .with_context(|| format!("failed to remove invalid partial {}", part_path.display()))?;
+        resume_from = 0;
+    }
+
     let mut hasher = Sha256::new();
-    let mut done: u64 = 0;
-    let mut buf = [0u8; 64 * 1024];
+    if resume_from > 0 {
+        hash_file_into(part_path, &mut hasher, cancellation)?;
+        if resume_from == expected_size {
+            progress(resume_from, expected_size);
+            return Ok(hex::encode(hasher.finalize()));
+        }
+    }
 
-    progress(0, total);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to create model download runtime")?;
+    runtime.block_on(stream_response_to_part(
+        url,
+        part_path,
+        expected_size,
+        resume_from,
+        hasher,
+        cancellation,
+        timeouts,
+        progress,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn stream_response_to_part(
+    url: &str,
+    part_path: &Path,
+    expected_size: u64,
+    resume_from: u64,
+    mut hasher: Sha256,
+    cancellation: &DownloadCancellation,
+    timeouts: DownloadTimeouts,
+    progress: &mut dyn FnMut(u64, u64),
+) -> Result<String> {
+    let client = reqwest::Client::builder()
+        .connect_timeout(timeouts.connect)
+        .build()
+        .context("failed to create model download client")?;
+    let mut request = client.get(url);
+    if resume_from > 0 {
+        request = request.header(RANGE, format!("bytes={resume_from}-"));
+    }
+
+    let mut send = Box::pin(request.send());
+    let response_deadline = tokio::time::sleep(timeouts.connect);
+    tokio::pin!(response_deadline);
+    let mut cancellation_tick = tokio::time::interval(CANCELLATION_POLL_INTERVAL);
+    cancellation_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    cancellation_tick.tick().await;
+
+    let mut response = loop {
+        tokio::select! {
+            result = &mut send => {
+                break result.with_context(|| format!("failed to request {url}"))?;
+            }
+            _ = &mut response_deadline => {
+                bail!("model download server did not respond within {:?}", timeouts.connect);
+            }
+            _ = cancellation_tick.tick() => cancellation.check()?,
+        }
+    };
+    cancellation.check()?;
+
+    let status = response.status();
+    let mut append = resume_from > 0;
+    if resume_from == 0 {
+        if status != StatusCode::OK {
+            bail!("download of {url} failed with status {status}");
+        }
+    } else if status == StatusCode::PARTIAL_CONTENT {
+        let content_range = response
+            .headers()
+            .get(CONTENT_RANGE)
+            .and_then(|value| value.to_str().ok());
+        let content_length = response.content_length();
+        if let Err(error) =
+            validate_partial_response(content_range, content_length, resume_from, expected_size)
+        {
+            let _ = fs::remove_file(part_path);
+            return Err(error);
+        }
+    } else if status == StatusCode::OK {
+        tracing::info!(
+            url,
+            "server ignored Range; restarting artifact from byte zero"
+        );
+        append = false;
+        hasher = Sha256::new();
+    } else if status == StatusCode::RANGE_NOT_SATISFIABLE {
+        let content_range = response
+            .headers()
+            .get(CONTENT_RANGE)
+            .and_then(|value| value.to_str().ok());
+        match validate_unsatisfied_response(content_range, resume_from, expected_size) {
+            Ok(()) => {
+                progress(resume_from, expected_size);
+                return Ok(hex::encode(hasher.finalize()));
+            }
+            Err(error) => {
+                let _ = fs::remove_file(part_path);
+                return Err(error);
+            }
+        }
+    } else {
+        bail!("download of {url} failed with status {status}; retry to resume");
+    }
+
+    let mut file = if append {
+        OpenOptions::new().create(true).append(true).open(part_path)
+    } else {
+        File::create(part_path)
+    }
+    .with_context(|| format!("failed to open {}", part_path.display()))?;
+    let mut done = if append { resume_from } else { 0 };
+    progress(done, expected_size);
+
     loop {
         cancellation.check()?;
-        let n = response
-            .read(&mut buf)
-            .context("failed reading response body")?;
-        cancellation.check()?;
-        if n == 0 {
+        let mut next_chunk = Box::pin(response.chunk());
+        let stall_deadline = tokio::time::sleep(timeouts.stall);
+        tokio::pin!(stall_deadline);
+        let chunk = loop {
+            tokio::select! {
+                result = &mut next_chunk => {
+                    break result.context("failed reading response body")?;
+                }
+                _ = &mut stall_deadline => {
+                    return Err(DownloadStalled { seconds: timeouts.stall.as_secs() }.into());
+                }
+                _ = cancellation_tick.tick() => cancellation.check()?,
+            }
+        };
+        let Some(chunk) = chunk else {
             break;
+        };
+        cancellation.check()?;
+
+        let new_done = done
+            .checked_add(chunk.len() as u64)
+            .ok_or_else(|| anyhow!("downloaded byte count overflowed"))?;
+        if new_done > expected_size {
+            drop(file);
+            let _ = fs::remove_file(part_path);
+            bail!(
+                "downloaded artifact is larger than expected: expected {expected_size} bytes, received more than {new_done}"
+            );
         }
-        hasher.update(&buf[..n]);
-        file.write_all(&buf[..n])
+
+        hasher.update(&chunk);
+        file.write_all(&chunk)
             .context("failed writing to part file")?;
-        done += n as u64;
-        progress(done, total);
+        done = new_done;
+        progress(done, expected_size);
     }
+
     cancellation.check()?;
     file.sync_all()
         .with_context(|| format!("failed to flush {}", part_path.display()))?;
+    if done != expected_size {
+        bail!("download ended after {done} of {expected_size} bytes; retry to resume");
+    }
 
     Ok(hex::encode(hasher.finalize()))
+}
+
+fn hash_file(path: &Path, cancellation: &DownloadCancellation) -> Result<(String, u64)> {
+    let mut hasher = Sha256::new();
+    let size = hash_file_into(path, &mut hasher, cancellation)?;
+    Ok((hex::encode(hasher.finalize()), size))
+}
+
+fn hash_file_into(
+    path: &Path,
+    hasher: &mut Sha256,
+    cancellation: &DownloadCancellation,
+) -> Result<u64> {
+    let mut file =
+        File::open(path).with_context(|| format!("failed to open partial {}", path.display()))?;
+    let mut size = 0u64;
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        cancellation.check()?;
+        let read = file
+            .read(&mut buffer)
+            .with_context(|| format!("failed to read partial {}", path.display()))?;
+        if read == 0 {
+            return Ok(size);
+        }
+        cancellation.check()?;
+        hasher.update(&buffer[..read]);
+        size += read as u64;
+    }
+}
+
+fn validate_partial_response(
+    content_range: Option<&str>,
+    content_length: Option<u64>,
+    resume_from: u64,
+    expected_size: u64,
+) -> Result<()> {
+    let Some((start, end, total)) = content_range.and_then(parse_partial_content_range) else {
+        bail!("server returned an invalid Content-Range; partial download was discarded");
+    };
+    if start != resume_from || total != expected_size {
+        bail!(
+            "server returned Content-Range bytes {start}-{end}/{total}, expected start {resume_from} and total {expected_size}; partial download was discarded"
+        );
+    }
+    if let Some(length) = content_length {
+        let ranged_length = end - start + 1;
+        if length != ranged_length {
+            bail!(
+                "server returned Content-Length {length} for a {ranged_length}-byte range; partial download was discarded"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_unsatisfied_response(
+    content_range: Option<&str>,
+    resume_from: u64,
+    expected_size: u64,
+) -> Result<()> {
+    let Some(total) = content_range.and_then(parse_unsatisfied_content_range) else {
+        bail!("server returned 416 without a valid Content-Range; partial download was discarded");
+    };
+    if total == expected_size && resume_from == expected_size {
+        Ok(())
+    } else {
+        bail!(
+            "server rejected resume at byte {resume_from} for a {total}-byte artifact; partial download was discarded"
+        )
+    }
+}
+
+fn parse_partial_content_range(value: &str) -> Option<(u64, u64, u64)> {
+    let value = value.strip_prefix("bytes ")?;
+    let (range, total) = value.split_once('/')?;
+    let (start, end) = range.split_once('-')?;
+    let start = start.parse().ok()?;
+    let end = end.parse().ok()?;
+    let total = total.parse().ok()?;
+    (start <= end && end < total).then_some((start, end, total))
+}
+
+fn parse_unsatisfied_content_range(value: &str) -> Option<u64> {
+    value.strip_prefix("bytes */")?.parse().ok()
 }
 
 #[cfg(test)]
@@ -855,7 +1181,7 @@ mod tests {
     use super::*;
     use std::net::TcpListener;
 
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     /// Leaks a `Vec<Artifact>` into a `&'static [Artifact]`, mirroring how
@@ -957,6 +1283,14 @@ mod tests {
         hex::encode(hasher.finalize())
     }
 
+    fn write_partial(data_dir: &Path, model: &str, artifact: &str, bytes: &[u8]) -> PathBuf {
+        let staging = data_dir.join("models").join(format!("{model}.staging"));
+        fs::create_dir_all(&staging).expect("create staging");
+        let path = staging.join(format!("{artifact}.part"));
+        fs::write(&path, bytes).expect("write partial");
+        path
+    }
+
     fn assert_cancelled(result: &Result<PathBuf>) {
         let error = result.as_ref().expect_err("download should be cancelled");
         assert!(
@@ -985,7 +1319,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn cancellation_mid_artifact_cleans_staging_and_a_fresh_retry_installs() {
+    async fn cancellation_mid_artifact_preserves_partial_and_retry_installs() {
         let server = MockServer::start().await;
         let body = vec![0x5au8; 200_000];
         let sha256 = sha256_hex(&body);
@@ -1022,7 +1356,11 @@ mod tests {
 
         assert_cancelled(&first);
         assert!(!dir.path().join("models/ggml-test.bin").exists());
-        assert!(!dir.path().join("models/test-whisper.staging").exists());
+        let part = dir
+            .path()
+            .join("models/test-whisper.staging/ggml-test.bin.part");
+        let partial_size = fs::metadata(&part).expect("partial must remain").len();
+        assert!(partial_size > 0 && partial_size < body.len() as u64);
 
         let installed =
             tokio::task::spawn_blocking(move || manager.download("test-whisper", &mut |_, _| {}))
@@ -1030,6 +1368,16 @@ mod tests {
                 .expect("blocking task panicked")
                 .expect("a new token should allow a clean retry");
         assert_eq!(fs::read(installed).expect("installed bytes"), body);
+        let requests = server.received_requests().await.expect("request log");
+        assert_eq!(requests.len(), 2);
+        let expected_range = format!("bytes={partial_size}-");
+        assert_eq!(
+            requests[1]
+                .headers
+                .get("range")
+                .and_then(|value| value.to_str().ok()),
+            Some(expected_range.as_str())
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1078,7 +1426,15 @@ mod tests {
 
         assert_cancelled(&result);
         assert!(!dir.path().join("models/test-multi").exists());
-        assert!(!dir.path().join("models/test-multi.staging").exists());
+        assert_eq!(
+            fs::read(dir.path().join("models/test-multi.staging/encoder.onnx"))
+                .expect("verified first artifact must remain"),
+            encoder
+        );
+        assert!(!dir
+            .path()
+            .join("models/test-multi.staging/tokens.txt.part")
+            .exists());
         let requests = server.received_requests().await.expect("request log");
         assert_eq!(
             requests.len(),
@@ -1150,6 +1506,7 @@ mod tests {
         let digest = stream_to_part(
             &format!("{base_url}/body"),
             &part_path,
+            500_000,
             &mut |done, total| calls.push((done, total)),
         )
         .expect("stream_to_part should succeed");
@@ -1170,7 +1527,211 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn wrong_checksum_errors_and_leaves_no_file_behind() {
+    async fn range_response_continues_a_partial_and_progress_starts_at_saved_bytes() {
+        let server = MockServer::start().await;
+        let body = vec![0x31u8; 90_000];
+        let split = 27_000usize;
+        let content_range = format!(
+            "bytes {split}-{}/{total}",
+            body.len() - 1,
+            total = body.len()
+        );
+        Mock::given(method("GET"))
+            .and(path("/ggml-test.bin"))
+            .and(header("range", format!("bytes={split}-")))
+            .respond_with(
+                ResponseTemplate::new(206)
+                    .insert_header("Content-Range", content_range)
+                    .set_body_bytes(body[split..].to_vec()),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_partial(dir.path(), "test-whisper", "ggml-test.bin", &body[..split]);
+        let entry = whisper_entry(
+            format!("{}/ggml-test.bin", server.uri()),
+            sha256_hex(&body),
+            body.len() as u64,
+        );
+        let manager = ModelManager::with_catalog(dir.path().to_path_buf(), vec![entry]);
+
+        let (installed, calls) = tokio::task::spawn_blocking(move || {
+            let mut calls = Vec::new();
+            let installed = manager
+                .download("test-whisper", &mut |done, total| calls.push((done, total)))
+                .expect("resume should install");
+            (installed, calls)
+        })
+        .await
+        .expect("blocking task panicked");
+
+        assert_eq!(fs::read(installed).expect("installed bytes"), body);
+        assert_eq!(calls.first(), Some(&(split as u64, body.len() as u64)));
+        assert_eq!(calls.last(), Some(&(body.len() as u64, body.len() as u64)));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn server_ignoring_range_restarts_from_zero_without_duplicating_bytes() {
+        let server = MockServer::start().await;
+        let body = vec![0x41u8; 24_000];
+        Mock::given(method("GET"))
+            .and(path("/ggml-test.bin"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(body.clone()))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_partial(dir.path(), "test-whisper", "ggml-test.bin", &body[..4_000]);
+        let entry = whisper_entry(
+            format!("{}/ggml-test.bin", server.uri()),
+            sha256_hex(&body),
+            body.len() as u64,
+        );
+        let manager = ModelManager::with_catalog(dir.path().to_path_buf(), vec![entry]);
+
+        let (installed, first_progress) = tokio::task::spawn_blocking(move || {
+            let mut first_progress = None;
+            let installed = manager
+                .download("test-whisper", &mut |done, total| {
+                    first_progress.get_or_insert((done, total));
+                })
+                .expect("full restart should install");
+            (installed, first_progress)
+        })
+        .await
+        .expect("blocking task panicked");
+
+        assert_eq!(first_progress, Some((0, body.len() as u64)));
+        assert_eq!(fs::read(installed).expect("installed bytes"), body);
+        let requests = server.received_requests().await.expect("request log");
+        assert!(requests[0].headers.get("range").is_some());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn wrong_content_range_discards_the_partial() {
+        let server = MockServer::start().await;
+        let body = vec![0x51u8; 10_000];
+        let split = 2_000usize;
+        Mock::given(method("GET"))
+            .and(path("/ggml-test.bin"))
+            .respond_with(
+                ResponseTemplate::new(206)
+                    .insert_header(
+                        "Content-Range",
+                        format!(
+                            "bytes {}-{}/{total}",
+                            split + 1,
+                            body.len() - 1,
+                            total = body.len()
+                        ),
+                    )
+                    .set_body_bytes(body[split..].to_vec()),
+            )
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let part = write_partial(dir.path(), "test-whisper", "ggml-test.bin", &body[..split]);
+        let entry = whisper_entry(
+            format!("{}/ggml-test.bin", server.uri()),
+            sha256_hex(&body),
+            body.len() as u64,
+        );
+        let manager = ModelManager::with_catalog(dir.path().to_path_buf(), vec![entry]);
+
+        let error = tokio::task::spawn_blocking(move || {
+            manager
+                .download("test-whisper", &mut |_, _| {})
+                .expect_err("wrong range must fail")
+        })
+        .await
+        .expect("blocking task panicked");
+
+        assert!(error.to_string().contains("expected start"));
+        assert!(!part.exists());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn range_not_satisfiable_for_incomplete_file_discards_the_partial() {
+        let server = MockServer::start().await;
+        let body = vec![0x61u8; 10_000];
+        Mock::given(method("GET"))
+            .and(path("/ggml-test.bin"))
+            .respond_with(
+                ResponseTemplate::new(416)
+                    .insert_header("Content-Range", format!("bytes */{}", body.len())),
+            )
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let part = write_partial(dir.path(), "test-whisper", "ggml-test.bin", &body[..2_000]);
+        let entry = whisper_entry(
+            format!("{}/ggml-test.bin", server.uri()),
+            sha256_hex(&body),
+            body.len() as u64,
+        );
+        let manager = ModelManager::with_catalog(dir.path().to_path_buf(), vec![entry]);
+
+        let result =
+            tokio::task::spawn_blocking(move || manager.download("test-whisper", &mut |_, _| {}))
+                .await
+                .expect("blocking task panicked");
+
+        assert!(result.is_err());
+        assert!(!part.exists());
+    }
+
+    #[test]
+    fn range_not_satisfiable_accepts_only_a_complete_matching_file() {
+        assert!(validate_unsatisfied_response(Some("bytes */100"), 100, 100).is_ok());
+        assert!(validate_unsatisfied_response(Some("bytes */100"), 99, 100).is_err());
+        assert!(validate_unsatisfied_response(Some("bytes */101"), 100, 100).is_err());
+        assert!(validate_unsatisfied_response(None, 100, 100).is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn oversized_partial_is_discarded_before_a_fresh_request() {
+        let server = MockServer::start().await;
+        let body = vec![0x71u8; 8_000];
+        Mock::given(method("GET"))
+            .and(path("/ggml-test.bin"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(body.clone()))
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_partial(
+            dir.path(),
+            "test-whisper",
+            "ggml-test.bin",
+            &vec![0u8; body.len() + 1],
+        );
+        let entry = whisper_entry(
+            format!("{}/ggml-test.bin", server.uri()),
+            sha256_hex(&body),
+            body.len() as u64,
+        );
+        let manager = ModelManager::with_catalog(dir.path().to_path_buf(), vec![entry]);
+
+        let installed = tokio::task::spawn_blocking(move || {
+            manager
+                .download("test-whisper", &mut |_, _| {})
+                .expect("fresh request should install")
+        })
+        .await
+        .expect("blocking task panicked");
+
+        assert_eq!(fs::read(installed).expect("installed bytes"), body);
+        let requests = server.received_requests().await.expect("request log");
+        assert!(requests[0].headers.get("range").is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn wrong_checksum_errors_and_discards_the_partial() {
         let server = MockServer::start().await;
         let body = vec![0x11u8; 1_000];
         let body_len = body.len() as u64;
@@ -1195,18 +1756,15 @@ mod tests {
                 .expect("blocking task panicked");
 
         assert!(result.is_err(), "checksum mismatch should be an error");
-        let models_dir = dir.path().join("models");
-        let remaining: Vec<_> = fs::read_dir(&models_dir)
-            .map(|entries| entries.filter_map(|e| e.ok()).collect())
-            .unwrap_or_default();
-        assert!(
-            remaining.is_empty(),
-            "expected no leftover files, found: {remaining:?}"
-        );
+        assert!(!dir.path().join("models/ggml-test.bin").exists());
+        assert!(!dir
+            .path()
+            .join("models/test-whisper.staging/ggml-test.bin.part")
+            .exists());
     }
 
     #[test]
-    fn interrupted_body_errors_and_leaves_no_partial_file() {
+    fn interrupted_body_errors_and_preserves_partial_file() {
         let dir = tempfile::tempdir().expect("tempdir");
         let (base_url, handle) = spawn_fixed_body_server(vec![9u8; 500_000], true);
         let entry = whisper_entry(
@@ -1220,14 +1778,62 @@ mod tests {
         let _ = handle.join();
 
         assert!(result.is_err(), "truncated body should be an error");
-        let models_dir = dir.path().join("models");
-        let remaining: Vec<_> = fs::read_dir(&models_dir)
-            .map(|entries| entries.filter_map(|e| e.ok()).collect())
-            .unwrap_or_default();
-        assert!(
-            remaining.is_empty(),
-            "expected no leftover files, found: {remaining:?}"
+        let part = dir
+            .path()
+            .join("models/test-whisper.staging/ggml-test.bin.part");
+        let size = fs::metadata(part).expect("partial must remain").len();
+        assert!(size > 0 && size < 500_000);
+    }
+
+    #[test]
+    fn stalled_body_times_out_and_preserves_received_bytes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let part_path = dir.path().join("stalled.part");
+        let prefix = vec![0x81u8; 2_000];
+        let expected_size = 10_000;
+        let (base_url, handle) =
+            spawn_stalling_body_server(prefix.clone(), expected_size, Duration::from_millis(200));
+
+        let result = stream_to_part_with_cancellation(
+            &format!("{base_url}/body"),
+            &part_path,
+            expected_size,
+            &DownloadCancellation::default(),
+            DownloadTimeouts {
+                connect: Duration::from_secs(1),
+                stall: Duration::from_millis(50),
+            },
+            &mut |_, _| {},
         );
+        handle.join().expect("server thread should not panic");
+
+        let error = result.expect_err("stalled body must time out");
+        assert!(error.downcast_ref::<DownloadStalled>().is_some());
+        assert_eq!(fs::read(part_path).expect("partial bytes"), prefix);
+    }
+
+    #[test]
+    fn response_header_wait_is_bounded() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let part_path = dir.path().join("no-headers.part");
+        let (base_url, handle) = spawn_headerless_server(Duration::from_millis(200));
+
+        let result = stream_to_part_with_cancellation(
+            &format!("{base_url}/body"),
+            &part_path,
+            10_000,
+            &DownloadCancellation::default(),
+            DownloadTimeouts {
+                connect: Duration::from_millis(50),
+                stall: Duration::from_secs(1),
+            },
+            &mut |_, _| {},
+        );
+        handle.join().expect("server thread should not panic");
+
+        let error = result.expect_err("missing response headers must time out");
+        assert!(error.to_string().contains("did not respond"));
+        assert!(!part_path.exists());
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1487,8 +2093,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn download_of_multi_artifact_model_leaves_nothing_behind_when_one_artifact_fails_checksum(
-    ) {
+    async fn multi_artifact_checksum_failure_keeps_only_previously_verified_artifacts() {
         let server = MockServer::start().await;
         let encoder_body = vec![0xBBu8; 5_000];
         let tokens_body = b"token list".to_vec();
@@ -1527,14 +2132,13 @@ mod tests {
             result.is_err(),
             "a bad artifact checksum should fail the whole download"
         );
-        let models_dir = dir.path().join("models");
-        let remaining: Vec<_> = fs::read_dir(&models_dir)
-            .map(|entries| entries.filter_map(|e| e.ok()).collect())
-            .unwrap_or_default();
-        assert!(
-            remaining.is_empty(),
-            "expected no leftover files or directories, found: {remaining:?}"
+        assert!(!dir.path().join("models/test-multi").exists());
+        let staging = dir.path().join("models/test-multi.staging");
+        assert_eq!(
+            fs::read(staging.join("encoder.onnx")).expect("verified encoder remains"),
+            encoder_body
         );
+        assert!(!staging.join("tokens.txt.part").exists());
     }
 
     // `ModelInfo` (the type `ModelManager::catalog()` returns) does not carry
@@ -1737,6 +2341,42 @@ mod tests {
                 let _ = stream.flush();
                 // Dropping `stream` here closes the socket; when truncated,
                 // the client is left expecting more bytes than were sent.
+            }
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    fn spawn_stalling_body_server(
+        prefix: Vec<u8>,
+        advertised_size: u64,
+        pause: Duration,
+    ) -> (String, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("local_addr");
+        let handle = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut request_buf = [0u8; 4096];
+                let _ = stream.read(&mut request_buf);
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {advertised_size}\r\nConnection: close\r\n\r\n"
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(&prefix);
+                let _ = stream.flush();
+                std::thread::sleep(pause);
+            }
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    fn spawn_headerless_server(pause: Duration) -> (String, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("local_addr");
+        let handle = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut request_buf = [0u8; 4096];
+                let _ = stream.read(&mut request_buf);
+                std::thread::sleep(pause);
             }
         });
         (format!("http://{addr}"), handle)
