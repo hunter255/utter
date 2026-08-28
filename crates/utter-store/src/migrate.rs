@@ -17,7 +17,7 @@ use crate::error::MigrateError;
 use crate::profile::{LanguageProfile, RecognitionCfg, RefinePolicy};
 use crate::settings::{
     Advanced, CloudSttCfg, Dictation, Dictionary, EngineCfg, EngineKind, General, HistoryCfg,
-    RefineCfg, Settings,
+    HudPlacement, RefineCfg, Settings,
 };
 
 /// The catalog id a v0.1 Russian vosk model (`vosk-model-small-ru-*`) is
@@ -74,6 +74,7 @@ pub fn migrate_v1(raw: &str) -> Result<Settings, MigrateError> {
             mode: v1.dictation.mode,
             silence_timeout_secs: v1.dictation.silence_timeout_secs,
             hud: v1.dictation.hud,
+            hud_placement: HudPlacement::default(),
         },
         refine: RefineCfg {
             enabled: v1.refine.enabled,
@@ -309,6 +310,7 @@ mod tests {
         );
         assert_eq!(profile.engine.whisper_model, "large-v3-turbo-q5_0");
         assert!(profile.refine.enabled, "the refine policy must survive");
+        assert_eq!(migrated.dictation.hud_placement, HudPlacement::Auto);
     }
 
     #[test]

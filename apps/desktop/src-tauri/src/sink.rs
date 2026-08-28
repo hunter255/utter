@@ -214,6 +214,17 @@ impl TauriEventSink {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    fn hud_placement(&self) -> utter_store::HudPlacement {
+        self.app
+            .state::<AppState>()
+            .settings
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .dictation
+            .hud_placement
+    }
+
     /// Shows or hides the HUD window, logging (rather than propagating) any
     /// failure to find or toggle it — a missing HUD window should never take
     /// the dictation pipeline down with it.
@@ -242,7 +253,9 @@ impl TauriEventSink {
                 // events reuse the visible window, so Accessibility and
                 // monitor queries never run at the frame rate.
                 #[cfg(target_os = "macos")]
-                if let Err(e) = crate::hud_position::position_hud(&self.app, &hud) {
+                if let Err(e) =
+                    crate::hud_position::position_hud(&self.app, &hud, self.hud_placement())
+                {
                     tracing::warn!("failed to position hud window: {e}");
                 }
 

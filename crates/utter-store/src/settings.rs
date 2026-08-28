@@ -102,6 +102,7 @@ pub struct Dictation {
     pub mode: DictationMode,
     pub silence_timeout_secs: Option<u32>,
     pub hud: bool,
+    pub hud_placement: HudPlacement,
 }
 
 impl Default for Dictation {
@@ -110,8 +111,26 @@ impl Default for Dictation {
             mode: DictationMode::PushToTalk,
             silence_timeout_secs: None,
             hud: true,
+            hud_placement: HudPlacement::Auto,
         }
     }
+}
+
+/// Where the recording HUD appears on macOS.
+///
+/// Other platforms keep this setting on disk so configurations remain
+/// portable, but currently use their existing window-manager placement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum HudPlacement {
+    /// Prefer the focused text caret, then fall back to the pointer and the
+    /// bottom of the active screen when Accessibility geometry is missing.
+    #[default]
+    Auto,
+    /// Follow the pointer without querying macOS Accessibility geometry.
+    Pointer,
+    /// Keep the HUD centered at the bottom of the active screen.
+    BottomCenter,
 }
 
 /// Speech-to-text engine selection and per-engine configuration.
@@ -539,6 +558,25 @@ mod tests {
     }
 
     #[test]
+    fn hud_placement_survives_save_and_load() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = config_path(dir.path());
+        let mut settings = Settings::default();
+        settings.dictation.hud_placement = HudPlacement::BottomCenter;
+
+        save(&path, &settings).expect("save should succeed");
+        assert!(
+            fs::read_to_string(&path)
+                .expect("read saved settings")
+                .contains("hud_placement = \"bottom_center\""),
+            "the persisted value must match the frontend wire contract"
+        );
+        let loaded = load(&path).expect("load should succeed");
+
+        assert_eq!(loaded.dictation.hud_placement, HudPlacement::BottomCenter);
+    }
+
+    #[test]
     fn loading_file_with_unknown_key_succeeds() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = config_path(dir.path());
@@ -604,6 +642,7 @@ mod tests {
 
         assert_eq!(loaded.dictation.mode, DictationMode::Toggle);
         assert_eq!(loaded.dictation.silence_timeout_secs, None);
+        assert_eq!(loaded.dictation.hud_placement, HudPlacement::Auto);
         assert_eq!(loaded.general, General::default());
         assert_eq!(
             loaded.advanced.model_idle_timeout_secs,
@@ -755,6 +794,7 @@ terms = ["PostgreSQL"]
         assert_eq!(settings.dictation.silence_timeout_secs, None);
         assert!(settings.dictation.hud);
         assert_eq!(settings.dictation.mode, DictationMode::PushToTalk);
+        assert_eq!(settings.dictation.hud_placement, HudPlacement::Auto);
 
         assert_eq!(settings.refine.timeout_secs, 10);
         assert!(!settings.refine.enabled);

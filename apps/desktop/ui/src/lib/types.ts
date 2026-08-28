@@ -10,6 +10,9 @@ export type Theme = 'system' | 'light' | 'dark'
 /** `crates/utter-core/src/session.rs::DictationMode` */
 export type DictationMode = 'push_to_talk' | 'toggle'
 
+/** `crates/utter-store/src/settings.rs::HudPlacement` */
+export type HudPlacement = 'auto' | 'pointer' | 'bottom_center'
+
 /** `crates/utter-store/src/settings.rs::EngineKind` */
 export type EngineKind = 'whisper' | 'cloud' | 'sherpa'
 
@@ -36,6 +39,7 @@ export interface Dictation {
   mode: DictationMode
   silence_timeout_secs: number | null
   hud: boolean
+  hud_placement: HudPlacement
 }
 
 /** `crates/utter-store/src/settings.rs::CloudSttCfg` */
@@ -157,6 +161,7 @@ export function defaultSettings(): Settings {
       mode: 'push_to_talk',
       silence_timeout_secs: null,
       hud: true,
+      hud_placement: 'auto',
     },
     refine: {
       enabled: false,

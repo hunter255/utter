@@ -136,6 +136,7 @@ mod macos {
     use core_foundation::string::CFString;
     use core_graphics_types::geometry::{CGPoint, CGRect, CGSize};
     use tauri::{AppHandle, LogicalPosition, Monitor, WebviewWindow};
+    use utter_store::HudPlacement;
 
     use super::{
         bottom_center, focused_element_is_useful, near_pointer, near_rect, Point, Rect, Size,
@@ -459,42 +460,68 @@ mod macos {
         })
     }
 
-    fn calculate_position(app: &AppHandle, hud: &WebviewWindow) -> Option<Point> {
+    fn fallback_monitor(
+        app: &AppHandle,
+        hud: &WebviewWindow,
+        pointer: Option<Point>,
+    ) -> Option<Monitor> {
+        pointer
+            .and_then(|point| monitor_for(hud, point))
+            .or_else(|| hud.current_monitor().ok().flatten())
+            .or_else(|| app.primary_monitor().ok().flatten())
+    }
+
+    fn calculate_position(
+        app: &AppHandle,
+        hud: &WebviewWindow,
+        placement: HudPlacement,
+    ) -> Option<Point> {
         let hud_size = hud_size(hud);
-        let anchors = accessibility_anchors();
 
-        if let Some(caret) = anchors.caret {
-            if let Some(monitor) = monitor_for(hud, caret.center()) {
-                return Some(near_rect(caret, hud_size, work_area(&monitor)));
+        let follow_pointer = match placement {
+            HudPlacement::Auto => {
+                let anchors = accessibility_anchors();
+
+                if let Some(caret) = anchors.caret {
+                    if let Some(monitor) = monitor_for(hud, caret.center()) {
+                        return Some(near_rect(caret, hud_size, work_area(&monitor)));
+                    }
+                }
+
+                if let Some(element) = anchors.focused_element {
+                    if let Some(monitor) = monitor_for(hud, element.center()) {
+                        let work = work_area(&monitor);
+                        if focused_element_is_useful(element, work) {
+                            return Some(near_rect(element, hud_size, work));
+                        }
+                    }
+                }
+
+                true
             }
-        }
+            HudPlacement::Pointer => true,
+            HudPlacement::BottomCenter => false,
+        };
 
-        if let Some(element) = anchors.focused_element {
-            if let Some(monitor) = monitor_for(hud, element.center()) {
-                let work = work_area(&monitor);
-                if focused_element_is_useful(element, work) {
-                    return Some(near_rect(element, hud_size, work));
+        let pointer = pointer(app);
+        if follow_pointer {
+            if let Some(pointer) = pointer {
+                if let Some(monitor) = monitor_for(hud, pointer) {
+                    return Some(near_pointer(pointer, hud_size, work_area(&monitor)));
                 }
             }
         }
 
-        let pointer = pointer(app);
-        if let Some(pointer) = pointer {
-            if let Some(monitor) = monitor_for(hud, pointer) {
-                return Some(near_pointer(pointer, hud_size, work_area(&monitor)));
-            }
-        }
-
-        let monitor = hud
-            .current_monitor()
-            .ok()
-            .flatten()
-            .or_else(|| app.primary_monitor().ok().flatten())?;
+        let monitor = fallback_monitor(app, hud, pointer)?;
         Some(bottom_center(hud_size, work_area(&monitor)))
     }
 
-    pub(super) fn position_hud(app: &AppHandle, hud: &WebviewWindow) -> Result<(), String> {
-        let point = calculate_position(app, hud)
+    pub(super) fn position_hud(
+        app: &AppHandle,
+        hud: &WebviewWindow,
+        placement: HudPlacement,
+    ) -> Result<(), String> {
+        let point = calculate_position(app, hud, placement)
             .ok_or_else(|| "no monitor is available for HUD positioning".to_string())?;
         hud.set_position(LogicalPosition::new(point.x, point.y))
             .map_err(|error| error.to_string())
@@ -505,8 +532,9 @@ mod macos {
 pub(crate) fn position_hud(
     app: &tauri::AppHandle,
     hud: &tauri::WebviewWindow,
+    placement: utter_store::HudPlacement,
 ) -> Result<(), String> {
-    macos::position_hud(app, hud)
+    macos::position_hud(app, hud, placement)
 }
 
 #[cfg(test)]
