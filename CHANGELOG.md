@@ -20,6 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   saved preference is reconciled at startup, and failures remain visible
   without discarding unrelated settings changes.
 
+### Fixed
+
+- A microphone stream that fails or disappears mid-dictation now cancels the
+  partial utterance, returns the runtime to idle, and explains how to retry
+  instead of leaving a silent recording active. A temporarily missing named
+  input falls back to the system default for the current run without changing
+  the saved device preference.
+
 ## [0.3.1] - 2026-08-20
 
 ### Fixed

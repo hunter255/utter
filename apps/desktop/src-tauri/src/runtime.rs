@@ -5,7 +5,8 @@
 //! ## Design
 //!
 //! [`Runtime::spawn`] starts one worker thread that owns a `crossbeam`
-//! `select!` loop over three channels: hotkey events, audio frames, and
+//! `select!` loop over three channels: hotkey events, typed capture events
+//! (audio frames or a terminal stream failure), and
 //! control messages ([`RuntimeHandle::cancel`]/`toggle`/`reload`/`shutdown`).
 //! Everything the loop needs — the [`Session`], the adapters, and a handful
 //! of small pieces of in-flight state (the active capture handle, the
@@ -102,6 +103,13 @@
 //! but `ActiveCapture` does not: the live capture handle is created *on* the
 //! worker thread by a `Send` backend and never leaves it, so `Capture`'s
 //! `!Send`-ness is never in tension with this design.
+//!
+//! A CPAL backend error travels through that same capture channel. While
+//! recording it becomes `Event::CaptureFailed`: the pure state machine goes
+//! straight to `Idle`, stops the stream, and reports an actionable error,
+//! never calling STT `finish()` on the partial utterance. A failure queued
+//! after a user-driven stop is ignored because that session already owns its
+//! transition to transcription.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -110,7 +118,7 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{select, unbounded, Receiver, Sender};
 
-use utter_audio::{rms_level, AudioFrame, SilenceDetector};
+use utter_audio::{rms_level, AudioError, AudioFrame, CaptureEvent, SilenceDetector};
 use utter_core::{
     DictationMode, Effect, Event, Session, State, TextInjector, TextRefiner, Tone,
     TranscribeOptions, Transcript,
@@ -154,8 +162,8 @@ pub trait CaptureBackend: Send {
     fn start(
         &self,
         device: Option<&str>,
-        tx: Sender<AudioFrame>,
-    ) -> Result<Box<dyn ActiveCapture>, String>;
+        tx: Sender<CaptureEvent>,
+    ) -> Result<Box<dyn ActiveCapture>, AudioError>;
 }
 
 /// Production [`CaptureBackend`]: starts real microphone capture via
@@ -166,11 +174,10 @@ impl CaptureBackend for RealCaptureBackend {
     fn start(
         &self,
         device: Option<&str>,
-        tx: Sender<AudioFrame>,
-    ) -> Result<Box<dyn ActiveCapture>, String> {
+        tx: Sender<CaptureEvent>,
+    ) -> Result<Box<dyn ActiveCapture>, AudioError> {
         utter_audio::Capture::start(device, tx)
             .map(|capture| Box::new(RealActiveCapture(capture)) as Box<dyn ActiveCapture>)
-            .map_err(|e| e.to_string())
     }
 }
 
@@ -347,8 +354,8 @@ struct WorkerCtx {
     // active) so the channel never disconnects: a disconnected receiver
     // would make every `select!` iteration see it as immediately "ready"
     // with an `Err`, spinning the worker thread at 100% CPU forever.
-    audio_tx: Sender<AudioFrame>,
-    audio_rx: Receiver<AudioFrame>,
+    audio_tx: Sender<CaptureEvent>,
+    audio_rx: Receiver<CaptureEvent>,
 
     active_capture: Option<Box<dyn ActiveCapture>>,
     silence_detector: Option<SilenceDetector>,
@@ -370,8 +377,8 @@ impl WorkerCtx {
     fn new(
         deps: RuntimeDeps,
         sink: Arc<dyn EventSink>,
-        audio_tx: Sender<AudioFrame>,
-        audio_rx: Receiver<AudioFrame>,
+        audio_tx: Sender<CaptureEvent>,
+        audio_rx: Receiver<CaptureEvent>,
         control_rx: Receiver<ControlMsg>,
     ) -> Self {
         Self {
@@ -455,7 +462,7 @@ fn phase_str(state: State) -> &'static str {
 }
 
 fn worker_loop(deps: RuntimeDeps, sink: Arc<dyn EventSink>, control_rx: Receiver<ControlMsg>) {
-    let (audio_tx, audio_rx) = unbounded::<AudioFrame>();
+    let (audio_tx, audio_rx) = unbounded::<CaptureEvent>();
     // Placeholder, replaced by `start_session_for` the moment the first press or `toggle()`
     // selects a profile (see `handle_hotkey_pressed`/`handle_toggle`) and reconstructs this with
     // that profile's own `refine_enabled`. The value here is never actually consulted:
@@ -495,8 +502,8 @@ fn worker_loop(deps: RuntimeDeps, sink: Arc<dyn EventSink>, control_rx: Receiver
                 Err(_) => {}
             },
             recv(ctx.audio_rx) -> msg => {
-                if let Ok(frame) = msg {
-                    handle_audio_frame(&mut session, &mut ctx, frame);
+                if let Ok(event) = msg {
+                    handle_capture_event(&mut session, &mut ctx, event);
                 }
             },
             recv(ctx.control_rx) -> msg => match msg {
@@ -650,7 +657,7 @@ fn dispatch(session: &mut Session, ctx: &mut WorkerCtx, event: Event) {
 
 fn run_effect(session: &mut Session, ctx: &mut WorkerCtx, effect: Effect) {
     match effect {
-        Effect::StartCapture => start_capture(ctx),
+        Effect::StartCapture => start_capture(session, ctx),
         Effect::StopCapture => stop_capture_and_maybe_transcribe(session, ctx),
         Effect::Refine(t) => run_refine(session, ctx, t),
         Effect::Inject(text) => run_inject(session, ctx, text),
@@ -659,7 +666,7 @@ fn run_effect(session: &mut Session, ctx: &mut WorkerCtx, effect: Effect) {
     }
 }
 
-fn start_capture(ctx: &mut WorkerCtx) {
+fn start_capture(session: &mut Session, ctx: &mut WorkerCtx) {
     ctx.session_started_at = Some(Instant::now());
     ctx.silence_detector = ctx
         .silence
@@ -690,28 +697,57 @@ fn start_capture(ctx: &mut WorkerCtx) {
     // a session that is about to fail costs nothing, since no frame ever
     // reaches it.
     begin_draft(ctx, &opts);
-    // `Session` has no event for "capture failed to start" (see the module
-    // doc comment): the cleanest recovery available here is to notify and
-    // leave the session in `Recording`. A subsequent stop (hotkey
-    // release/toggle/silence/cancel) will run `StopCapture` as normal; with
-    // no audio ever fed, `engine.finish()` on an un-begun engine is expected
-    // to error, which naturally routes to `TranscriptFailed` and back to
-    // `Idle` — self-healing without `Session` needing to know about it.
+    // Starting recognition before opening hardware keeps both engines ready
+    // for the first frame. A capture-start failure below is then dispatched
+    // through `CaptureFailed`, which cancels this begun-but-empty utterance
+    // without calling `finish()` or injecting anything.
     if let Err(e) = active_profile(ctx).engine.begin(&opts) {
         ctx.sink
             .notify("error", &format!("failed to start transcription: {e}"));
         return;
     }
 
-    match ctx
+    let requested_device = ctx.capture_device.clone();
+    let first_attempt = ctx
         .capture
-        .start(ctx.capture_device.as_deref(), ctx.audio_tx.clone())
-    {
+        .start(requested_device.as_deref(), ctx.audio_tx.clone());
+
+    let result = match first_attempt {
+        Err(AudioError::DeviceNotFound(name)) if requested_device.is_some() => {
+            ctx.sink.notify(
+                "warning",
+                &format!(
+                    "Selected audio input \"{name}\" is unavailable; using the system default \
+                     for this run. Your saved device was not changed."
+                ),
+            );
+            // Runtime-only fallback. A settings reload or app restart reads
+            // the user's named device again; the persisted preference is
+            // never silently rewritten because a Bluetooth/USB device was
+            // temporarily absent.
+            ctx.capture_device = None;
+            ctx.capture.start(None, ctx.audio_tx.clone())
+        }
+        other => other,
+    };
+
+    match result {
         Ok(active) => ctx.active_capture = Some(active),
-        Err(e) => ctx
-            .sink
-            .notify("error", &format!("failed to start audio capture: {e}")),
+        Err(error) => dispatch(
+            session,
+            ctx,
+            Event::CaptureFailed(capture_failure_notice(&format!(
+                "could not start capture: {error}"
+            ))),
+        ),
     }
+}
+
+fn capture_failure_notice(reason: &str) -> String {
+    format!(
+        "Audio input stopped: {reason}. Check that the microphone is connected and selected, \
+         then press the hotkey to try again."
+    )
 }
 
 /// Starts the active profile's draft engine, if it has one, on the same
@@ -834,6 +870,22 @@ fn handle_audio_frame(session: &mut Session, ctx: &mut WorkerCtx, frame: AudioFr
     }
 }
 
+fn handle_capture_event(session: &mut Session, ctx: &mut WorkerCtx, event: CaptureEvent) {
+    match event {
+        CaptureEvent::Frame(frame) => handle_audio_frame(session, ctx, frame),
+        CaptureEvent::StreamFailed(reason) if session.state() == State::Recording => dispatch(
+            session,
+            ctx,
+            Event::CaptureFailed(capture_failure_notice(&reason)),
+        ),
+        // CPAL may deliver an already-queued terminal callback while a
+        // user-driven stop is transcribing. That session already owns its
+        // end transition; a late stream error must not finish or notify it a
+        // second time.
+        CaptureEvent::StreamFailed(_) => {}
+    }
+}
+
 /// Executes `Effect::StopCapture`: stops the active capture (flushing
 /// trailing audio into the channel), drains whatever is now sitting there,
 /// and — only if the session actually landed in `Transcribing` (as opposed
@@ -846,8 +898,10 @@ fn stop_capture_and_maybe_transcribe(session: &mut Session, ctx: &mut WorkerCtx)
     ctx.silence_detector = None;
 
     let mut trailing = Vec::new();
-    while let Ok(frame) = ctx.audio_rx.try_recv() {
-        trailing.push(frame);
+    while let Ok(event) = ctx.audio_rx.try_recv() {
+        if let CaptureEvent::Frame(frame) = event {
+            trailing.push(frame);
+        }
     }
 
     if session.state() != State::Transcribing {

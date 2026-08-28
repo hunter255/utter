@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
-use utter_audio::AudioFrame;
+use utter_audio::{AudioError, AudioFrame, CaptureEvent};
 use utter_core::{
     DictationMode, InjectError, InjectionMethod, RefineError, SttEngine, SttError, TextInjector,
     TextRefiner, Tone, TranscribeOptions, Transcript,
@@ -238,20 +238,70 @@ impl TextInjector for FakeInjector {
 }
 
 /// Never touches real audio hardware. Hands back a no-op capture handle,
-/// and — this is the point of it — stashes the `Sender<AudioFrame>` it was
+/// and — this is the point of it — stashes the `Sender<CaptureEvent>` it was
 /// given into a shared slot, so a test can fetch it after "recording" starts
 /// and push scripted `AudioFrame`s through the exact same channel the real
 /// worker loop reads from.
 struct FakeCaptureBackend {
-    tx_slot: Arc<Mutex<Option<Sender<AudioFrame>>>>,
+    tx_slot: Arc<Mutex<Option<Sender<CaptureEvent>>>>,
 }
 
 impl CaptureBackend for FakeCaptureBackend {
     fn start(
         &self,
         _device: Option<&str>,
-        tx: Sender<AudioFrame>,
-    ) -> Result<Box<dyn ActiveCapture>, String> {
+        tx: Sender<CaptureEvent>,
+    ) -> Result<Box<dyn ActiveCapture>, AudioError> {
+        *self.tx_slot.lock().expect("lock") = Some(tx);
+        Ok(Box::new(NoopActiveCapture))
+    }
+}
+
+/// Records every requested device and reports a named device as missing.
+/// The default-device retry can either succeed or return a scripted error.
+struct MissingSelectedCaptureBackend {
+    calls: Arc<Mutex<Vec<Option<String>>>>,
+    tx_slot: Arc<Mutex<Option<Sender<CaptureEvent>>>>,
+    default_error: Option<AudioError>,
+}
+
+impl CaptureBackend for MissingSelectedCaptureBackend {
+    fn start(
+        &self,
+        device: Option<&str>,
+        tx: Sender<CaptureEvent>,
+    ) -> Result<Box<dyn ActiveCapture>, AudioError> {
+        self.calls
+            .lock()
+            .expect("lock")
+            .push(device.map(str::to_string));
+
+        if let Some(name) = device {
+            return Err(AudioError::DeviceNotFound(name.to_string()));
+        }
+        if let Some(error) = &self.default_error {
+            return Err(error.clone());
+        }
+
+        *self.tx_slot.lock().expect("lock") = Some(tx);
+        Ok(Box::new(NoopActiveCapture))
+    }
+}
+
+/// A successful backend whose start count proves a stream failure does not
+/// poison the factory for the next hotkey press.
+struct CountingCaptureBackend {
+    starts: Arc<AtomicUsize>,
+    tx_slot: Arc<Mutex<Option<Sender<CaptureEvent>>>>,
+}
+
+impl CaptureBackend for CountingCaptureBackend {
+    fn start(
+        &self,
+        _device: Option<&str>,
+        tx: Sender<CaptureEvent>,
+    ) -> Result<Box<dyn ActiveCapture>, AudioError> {
+        self.starts.fetch_add(1, Ordering::SeqCst);
         *self.tx_slot.lock().expect("lock") = Some(tx);
         Ok(Box::new(NoopActiveCapture))
     }
@@ -451,7 +501,9 @@ struct DepsBuilder {
     snippets: Vec<Snippet>,
     history: Option<HistoryRepo>,
     silence: Option<Duration>,
-    capture_tx_slot: Arc<Mutex<Option<Sender<AudioFrame>>>>,
+    capture_tx_slot: Arc<Mutex<Option<Sender<CaptureEvent>>>>,
+    capture_device: Option<String>,
+    capture: Option<Box<dyn CaptureBackend>>,
     dictionary_terms: Vec<String>,
     /// The profile's language, as read into `TranscribeOptions.language` by `start_capture`.
     /// Defaults to `None` like every other fixture; the one test that cares sets a real value
@@ -489,6 +541,8 @@ impl DepsBuilder {
             history: None,
             silence: None,
             capture_tx_slot: Arc::new(Mutex::new(None)),
+            capture_device: None,
+            capture: None,
             dictionary_terms: Vec::new(),
             language: None,
             begin_opts: Arc::new(Mutex::new(Vec::new())),
@@ -527,6 +581,12 @@ impl DepsBuilder {
         };
         let profiles = registry_with(vec![(test_profile("default"), profile_deps)]);
 
+        let capture = self.capture.unwrap_or_else(|| {
+            Box::new(FakeCaptureBackend {
+                tx_slot: self.capture_tx_slot,
+            })
+        });
+
         RuntimeDeps {
             mode: self.mode,
             silence: self.silence,
@@ -538,10 +598,8 @@ impl DepsBuilder {
             rules: self.rules,
             snippets: self.snippets,
             history: self.history,
-            capture_device: None,
-            capture: Box::new(FakeCaptureBackend {
-                tx_slot: self.capture_tx_slot,
-            }),
+            capture_device: self.capture_device,
+            capture,
             hotkey_rx,
             vad_sensitivity: 0.5,
             refine_timeout: Duration::from_secs(1),
@@ -559,7 +617,7 @@ fn fake_sink() -> (Arc<FakeSink>, Receiver<Emission>, Receiver<Notice>) {
     (sink, states_rx, notices_rx)
 }
 
-/// Retrieves the `Sender<AudioFrame>` a `FakeCaptureBackend` stashed once
+/// Retrieves the `Sender<CaptureEvent>` a `FakeCaptureBackend` stashed once
 /// capture started.
 ///
 /// Observing the `"recording"` state emission only proves `dispatch` has
@@ -571,7 +629,7 @@ fn fake_sink() -> (Arc<FakeSink>, Receiver<Emission>, Receiver<Notice>) {
 /// stash) has completed by the time a test's `recv_state` call returns —
 /// only that it's *about to*. Poll with a bounded total wait instead of
 /// asserting immediately.
-fn capture_tx(slot: &Arc<Mutex<Option<Sender<AudioFrame>>>>) -> Sender<AudioFrame> {
+fn capture_tx(slot: &Arc<Mutex<Option<Sender<CaptureEvent>>>>) -> Sender<CaptureEvent> {
     let deadline = Instant::now() + WAIT;
     loop {
         if let Some(tx) = slot.lock().expect("lock").clone() {
@@ -580,6 +638,20 @@ fn capture_tx(slot: &Arc<Mutex<Option<Sender<AudioFrame>>>>) -> Sender<AudioFram
         assert!(
             Instant::now() < deadline,
             "capture should have started and stashed its sender within {WAIT:?}"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn wait_for_capture_calls(calls: &Arc<Mutex<Vec<Option<String>>>>, expected: usize) {
+    let deadline = Instant::now() + WAIT;
+    loop {
+        if calls.lock().expect("lock").len() >= expected {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "expected {expected} capture start calls within {WAIT:?}"
         );
         thread::sleep(Duration::from_millis(5));
     }
@@ -1235,6 +1307,234 @@ fn toggle_drives_a_full_session_in_toggle_mode() {
 }
 
 #[test]
+fn stream_failure_during_recording_returns_idle_and_injects_nothing() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let injected = Arc::new(Mutex::new(Vec::new()));
+    let tx_slot = Arc::new(Mutex::new(None));
+    let (sink, states_rx, notices_rx) = fake_sink();
+    let (hotkey_tx, hotkey_rx) = unbounded();
+
+    let mut builder = DepsBuilder::new(Ok(transcript("partial words must be discarded")));
+    builder.calls = calls.clone();
+    builder.injected = injected.clone();
+    builder.capture_tx_slot = tx_slot.clone();
+    let handle = Runtime::spawn(builder.build(hotkey_rx), sink);
+
+    hotkey_tx
+        .send(HotkeyEvent::Pressed {
+            binding: BindingId::from(0),
+        })
+        .expect("send pressed");
+    assert_eq!(recv_state(&states_rx), "recording");
+
+    capture_tx(&tx_slot)
+        .send(CaptureEvent::StreamFailed(
+            "Bluetooth device disconnected".to_string(),
+        ))
+        .expect("send stream failure");
+
+    recv_until(&states_rx, "idle");
+    let (kind, message) = recv_notice(&notices_rx);
+    assert_eq!(kind, "error");
+    assert!(message.contains("Bluetooth device disconnected"));
+    assert!(message.contains("press the hotkey to try again"));
+    assert!(injected.lock().expect("lock").is_empty());
+    assert!(
+        !calls.lock().expect("lock").contains(&CallRecord::Finish),
+        "capture failure must cancel, not transcribe a partial utterance"
+    );
+
+    handle.shutdown();
+}
+
+#[test]
+fn next_press_creates_a_fresh_capture_after_stream_failure() {
+    let starts = Arc::new(AtomicUsize::new(0));
+    let tx_slot = Arc::new(Mutex::new(None));
+    let (sink, states_rx, notices_rx) = fake_sink();
+    let (hotkey_tx, hotkey_rx) = unbounded();
+
+    let mut builder = DepsBuilder::new(Ok(transcript("second attempt")));
+    builder.capture = Some(Box::new(CountingCaptureBackend {
+        starts: starts.clone(),
+        tx_slot: tx_slot.clone(),
+    }));
+    let handle = Runtime::spawn(builder.build(hotkey_rx), sink);
+
+    hotkey_tx
+        .send(HotkeyEvent::Pressed {
+            binding: BindingId::from(0),
+        })
+        .expect("send first press");
+    assert_eq!(recv_state(&states_rx), "recording");
+    let failed_tx = capture_tx(&tx_slot);
+    failed_tx
+        .send(CaptureEvent::StreamFailed("device vanished".to_string()))
+        .expect("send stream failure");
+    recv_until(&states_rx, "idle");
+    let _ = recv_notice(&notices_rx);
+
+    hotkey_tx
+        .send(HotkeyEvent::Pressed {
+            binding: BindingId::from(0),
+        })
+        .expect("send second press");
+    assert_eq!(recv_state(&states_rx), "recording");
+    let deadline = Instant::now() + WAIT;
+    while starts.load(Ordering::SeqCst) < 2 {
+        assert!(Instant::now() < deadline, "second capture did not start");
+        thread::sleep(Duration::from_millis(5));
+    }
+
+    handle.cancel();
+    recv_until(&states_rx, "idle");
+    handle.shutdown();
+}
+
+#[test]
+fn late_stream_failure_after_stop_does_not_finish_or_notify_twice() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let injected = Arc::new(Mutex::new(Vec::new()));
+    let tx_slot = Arc::new(Mutex::new(None));
+    let (sink, states_rx, notices_rx) = fake_sink();
+    let (hotkey_tx, hotkey_rx) = unbounded();
+
+    let mut builder = DepsBuilder::new(Ok(transcript("complete utterance")));
+    builder.calls = calls.clone();
+    builder.injected = injected.clone();
+    builder.finish_delay = Duration::from_millis(100);
+    builder.capture_tx_slot = tx_slot.clone();
+    let handle = Runtime::spawn(builder.build(hotkey_rx), sink);
+
+    hotkey_tx
+        .send(HotkeyEvent::Pressed {
+            binding: BindingId::from(0),
+        })
+        .expect("send pressed");
+    assert_eq!(recv_state(&states_rx), "recording");
+    let stale_tx = capture_tx(&tx_slot);
+
+    hotkey_tx
+        .send(HotkeyEvent::Released {
+            binding: BindingId::from(0),
+        })
+        .expect("send released");
+    recv_until(&states_rx, "transcribing");
+    stale_tx
+        .send(CaptureEvent::StreamFailed("late callback".to_string()))
+        .expect("send late failure");
+    recv_until(&states_rx, "injecting");
+    recv_until(&states_rx, "idle");
+
+    assert_eq!(*injected.lock().expect("lock"), vec!["complete utterance"]);
+    assert_eq!(
+        calls
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|call| **call == CallRecord::Finish)
+            .count(),
+        1
+    );
+    assert_no_more_states(&states_rx);
+    assert_no_more_notices(&notices_rx);
+
+    handle.shutdown();
+}
+
+#[test]
+fn missing_selected_device_falls_back_once_without_rewriting_the_preference() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let tx_slot = Arc::new(Mutex::new(None));
+    let (sink, states_rx, notices_rx) = fake_sink();
+    let (hotkey_tx, hotkey_rx) = unbounded();
+
+    let mut builder = DepsBuilder::new(Ok(transcript("fallback works")));
+    builder.capture_device = Some("Andrey's AirPods".to_string());
+    builder.capture = Some(Box::new(MissingSelectedCaptureBackend {
+        calls: calls.clone(),
+        tx_slot,
+        default_error: None,
+    }));
+    let handle = Runtime::spawn(builder.build(hotkey_rx), sink);
+
+    hotkey_tx
+        .send(HotkeyEvent::Pressed {
+            binding: BindingId::from(0),
+        })
+        .expect("send first press");
+    assert_eq!(recv_state(&states_rx), "recording");
+    wait_for_capture_calls(&calls, 2);
+    let (kind, message) = recv_notice(&notices_rx);
+    assert_eq!(kind, "warning");
+    assert!(message.contains("Andrey's AirPods"));
+    assert!(message.contains("system default for this run"));
+    assert!(message.contains("saved device was not changed"));
+
+    handle.cancel();
+    recv_until(&states_rx, "idle");
+
+    hotkey_tx
+        .send(HotkeyEvent::Pressed {
+            binding: BindingId::from(0),
+        })
+        .expect("send second press");
+    assert_eq!(recv_state(&states_rx), "recording");
+    wait_for_capture_calls(&calls, 3);
+    assert_eq!(
+        *calls.lock().expect("lock"),
+        vec![Some("Andrey's AirPods".to_string()), None, None,],
+        "the unavailable saved name is retried only after a reload/restart"
+    );
+    assert_no_more_notices(&notices_rx);
+
+    handle.cancel();
+    recv_until(&states_rx, "idle");
+    handle.shutdown();
+}
+
+#[test]
+fn failed_default_fallback_ends_the_session_with_an_actionable_error() {
+    let injected = Arc::new(Mutex::new(Vec::new()));
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let (sink, states_rx, notices_rx) = fake_sink();
+    let (hotkey_tx, hotkey_rx) = unbounded();
+
+    let mut builder = DepsBuilder::new(Ok(transcript("must not be inserted")));
+    builder.injected = injected.clone();
+    builder.capture_device = Some("Unplugged USB Mic".to_string());
+    builder.capture = Some(Box::new(MissingSelectedCaptureBackend {
+        calls: calls.clone(),
+        tx_slot: Arc::new(Mutex::new(None)),
+        default_error: Some(AudioError::NoDefaultDevice),
+    }));
+    let handle = Runtime::spawn(builder.build(hotkey_rx), sink);
+
+    hotkey_tx
+        .send(HotkeyEvent::Pressed {
+            binding: BindingId::from(0),
+        })
+        .expect("send pressed");
+    assert_eq!(recv_state(&states_rx), "recording");
+    recv_until(&states_rx, "idle");
+
+    let (fallback_kind, fallback_message) = recv_notice(&notices_rx);
+    assert_eq!(fallback_kind, "warning");
+    assert!(fallback_message.contains("system default"));
+    let (error_kind, error_message) = recv_notice(&notices_rx);
+    assert_eq!(error_kind, "error");
+    assert!(error_message.contains("no default input device"));
+    assert!(error_message.contains("connected and selected"));
+    assert_eq!(
+        *calls.lock().expect("lock"),
+        vec![Some("Unplugged USB Mic".to_string()), None]
+    );
+    assert!(injected.lock().expect("lock").is_empty());
+
+    handle.shutdown();
+}
+
+#[test]
 fn audio_frames_are_fed_to_engine_and_partial_reaches_sink() {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let tx_slot = Arc::new(Mutex::new(None));
@@ -1257,9 +1557,9 @@ fn audio_frames_are_fed_to_engine_and_partial_reaches_sink() {
     assert_eq!(recv_state(&states_rx), "recording");
 
     let tx = capture_tx(&tx_slot);
-    tx.send(AudioFrame {
+    tx.send(CaptureEvent::Frame(AudioFrame {
         samples: vec![100; 50],
-    })
+    }))
     .expect("send frame");
 
     // The frame's rms/partial reaches the sink as a "recording" emission
@@ -1308,13 +1608,13 @@ fn trailing_frames_are_fed_before_finish_is_called() {
     // normal recording-path feed, or the hotkey release triggering
     // `StopCapture`'s trailing-frame drain), every sample must still reach
     // `engine.feed` strictly before `engine.finish()` is called.
-    tx.send(AudioFrame {
+    tx.send(CaptureEvent::Frame(AudioFrame {
         samples: vec![1, 2, 3],
-    })
+    }))
     .expect("send frame 1");
-    tx.send(AudioFrame {
+    tx.send(CaptureEvent::Frame(AudioFrame {
         samples: vec![4, 5, 6],
-    })
+    }))
     .expect("send frame 2");
     hotkey_tx
         .send(HotkeyEvent::Released {
@@ -1378,9 +1678,9 @@ fn silence_timeout_stops_recording_without_hotkey_release() {
     // time so the 30ms silence hold genuinely elapses; comfortably more
     // frames than needed, for margin.
     for _ in 0..10 {
-        tx.send(AudioFrame {
+        tx.send(CaptureEvent::Frame(AudioFrame {
             samples: vec![0i16; 10],
-        })
+        }))
         .expect("send silent frame");
         thread::sleep(Duration::from_millis(10));
     }
@@ -1766,13 +2066,13 @@ fn both_engines_are_fed_the_same_frames_while_recording() {
     assert_eq!(recv_state(&states_rx), "recording");
 
     let tx = capture_tx(&tx_slot);
-    tx.send(AudioFrame {
+    tx.send(CaptureEvent::Frame(AudioFrame {
         samples: vec![1, 2, 3],
-    })
+    }))
     .expect("send frame 1");
-    tx.send(AudioFrame {
+    tx.send(CaptureEvent::Frame(AudioFrame {
         samples: vec![4, 5, 6],
-    })
+    }))
     .expect("send frame 2");
 
     // Both frames have now gone through the recording path -- and therefore through the
@@ -1914,9 +2214,9 @@ fn draft_text_never_reaches_the_injected_result_or_history() {
     assert_eq!(recv_state(&states_rx), "recording");
 
     let tx = capture_tx(&tx_slot);
-    tx.send(AudioFrame {
+    tx.send(CaptureEvent::Frame(AudioFrame {
         samples: vec![100; 50],
-    })
+    }))
     .expect("send frame");
 
     assert_eq!(
@@ -1991,13 +2291,13 @@ fn a_failing_draft_engine_does_not_break_dictation() {
     assert_eq!(recv_state(&states_rx), "recording");
 
     let tx = capture_tx(&tx_slot);
-    tx.send(AudioFrame {
+    tx.send(CaptureEvent::Frame(AudioFrame {
         samples: vec![1, 2, 3],
-    })
+    }))
     .expect("send frame 1");
-    tx.send(AudioFrame {
+    tx.send(CaptureEvent::Frame(AudioFrame {
         samples: vec![4, 5, 6],
-    })
+    }))
     .expect("send frame 2");
 
     wait_for_feeds(&final_calls, 2);
@@ -2064,9 +2364,9 @@ fn a_draft_engine_that_fails_to_begin_does_not_stop_the_session() {
     assert_eq!(recv_state(&states_rx), "recording");
 
     let tx = capture_tx(&tx_slot);
-    tx.send(AudioFrame {
+    tx.send(CaptureEvent::Frame(AudioFrame {
         samples: vec![1, 2, 3],
-    })
+    }))
     .expect("send frame");
 
     wait_for_feeds(&final_calls, 1);
