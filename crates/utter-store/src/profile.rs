@@ -30,6 +30,10 @@ pub struct LanguageProfile {
     /// default — leaves the preview off; the profile still dictates, and the
     /// text that gets injected always comes from `engine` either way.
     pub draft: Option<DraftCfg>,
+    /// How the speech recognizer should be prompted before it decodes this
+    /// profile's audio. This is separate from LLM refinement: it biases the
+    /// ASR model itself, before a transcript exists.
+    pub recognition: RecognitionCfg,
     /// Whether and how this profile's transcripts are refined.
     pub refine: RefinePolicy,
 }
@@ -42,9 +46,35 @@ impl Default for LanguageProfile {
             language: "en".to_string(),
             engine: EngineCfg::default(),
             draft: None,
+            recognition: RecognitionCfg::default(),
             refine: RefinePolicy::default(),
         }
     }
+}
+
+/// Per-profile speech-recognition prompt policy.
+///
+/// `Recommended` selects the prompt recipe associated with the chosen model,
+/// `Disabled` suppresses that recipe, and `Custom` uses `custom_prompt`.
+/// Dictionary terms remain a separate recognition hint in every mode.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct RecognitionCfg {
+    pub prompt_mode: RecognitionPromptMode,
+    pub custom_prompt: String,
+}
+
+/// Which source supplies the profile's speech-recognition prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RecognitionPromptMode {
+    /// Use the tested prompt recipe for the selected model, if one exists.
+    #[default]
+    Recommended,
+    /// Do not add a model recipe; dictionary terms are still supplied.
+    Disabled,
+    /// Use [`RecognitionCfg::custom_prompt`] instead of a model recipe.
+    Custom,
 }
 
 /// The streaming model backing a profile's live preview.
@@ -101,5 +131,25 @@ mod tests {
         let text = toml::to_string(&draft).expect("serialize");
         let parsed: DraftCfg = toml::from_str(&text).expect("deserialize");
         assert_eq!(parsed, draft);
+    }
+
+    #[test]
+    fn recognition_defaults_to_the_model_recipe() {
+        assert_eq!(
+            RecognitionCfg::default().prompt_mode,
+            RecognitionPromptMode::Recommended
+        );
+        assert!(RecognitionCfg::default().custom_prompt.is_empty());
+    }
+
+    #[test]
+    fn recognition_config_round_trips_through_toml() {
+        let recognition = RecognitionCfg {
+            prompt_mode: RecognitionPromptMode::Custom,
+            custom_prompt: "Keep API names in Latin script.".to_string(),
+        };
+        let text = toml::to_string(&recognition).expect("serialize");
+        let parsed: RecognitionCfg = toml::from_str(&text).expect("deserialize");
+        assert_eq!(parsed, recognition);
     }
 }

@@ -13,7 +13,7 @@ use utter_refine::{ReplaceRule, Snippet};
 
 use crate::error::MigrationFailed;
 use crate::migrate::{migrate_v1, predates_profiles};
-use crate::profile::{LanguageProfile, RefinePolicy};
+use crate::profile::{LanguageProfile, RecognitionCfg, RefinePolicy};
 
 /// The full, on-disk application settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -51,6 +51,7 @@ impl Default for Settings {
                 language: "en".to_string(),
                 engine: EngineCfg::sherpa("parakeet-tdt-110m-en"),
                 draft: None,
+                recognition: RecognitionCfg::default(),
                 refine: RefinePolicy::default(),
             }],
         }
@@ -455,6 +456,7 @@ mod tests {
                 language: "ru".into(),
                 engine: EngineCfg::sherpa("gigaam-v3-e2e-rnnt"),
                 draft: None,
+                recognition: RecognitionCfg::default(),
                 refine: RefinePolicy {
                     enabled: false,
                     tone: Tone::Clean,

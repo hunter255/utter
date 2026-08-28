@@ -16,6 +16,7 @@
     LanguageProfile,
     ModelInfo,
     PlatformCapabilities,
+    RecognitionPromptMode,
     Tone,
   } from '../lib/types'
 
@@ -42,6 +43,12 @@
     { value: 'formal', label: 'Formal' },
     { value: 'notes', label: 'Notes (terse, bulleted)' },
     { value: 'code_comment', label: 'Code comment' },
+  ]
+
+  const RECOGNITION_PROMPT_OPTIONS: { value: RecognitionPromptMode; label: string }[] = [
+    { value: 'recommended', label: 'Recommended for model' },
+    { value: 'disabled', label: 'Off' },
+    { value: 'custom', label: 'Custom' },
   ]
 
   let models = $state<ModelInfo[]>([])
@@ -129,6 +136,7 @@
         cloud: { base_url: 'https://api.openai.com/v1', model: 'whisper-1' },
       },
       draft: null,
+      recognition: { prompt_mode: 'recommended', custom_prompt: '' },
       refine: { enabled: false, tone: 'clean' },
     }
     settingsStore.patch({ profiles: [...settings.profiles, newProfile] })
@@ -233,6 +241,39 @@
           }
         />
       </Field>
+      <Field
+        label="Recognition prompt"
+        for="profile-{index}-recognition-prompt-mode"
+        hint="Guides Whisper before recognition. Dictionary terms are added separately in every mode; this does not call the refinement LLM."
+      >
+        <Select
+          id="profile-{index}-recognition-prompt-mode"
+          options={RECOGNITION_PROMPT_OPTIONS}
+          bind:value={
+            () => profile.recognition.prompt_mode,
+            (v) =>
+              updateProfile(index, {
+                recognition: { prompt_mode: v as RecognitionPromptMode },
+              })
+          }
+        />
+      </Field>
+      {#if profile.recognition.prompt_mode === 'custom'}
+        <Field
+          label="Custom recognition prompt"
+          for="profile-{index}-recognition-prompt"
+          hint="Keep it concise: punctuation examples, language mix, and desired spellings work better than editing instructions."
+        >
+          <textarea
+            id="profile-{index}-recognition-prompt"
+            rows="4"
+            bind:value={
+              () => profile.recognition.custom_prompt,
+              (v) => updateProfile(index, { recognition: { custom_prompt: v } })
+            }
+          ></textarea>
+        </Field>
+      {/if}
     {:else if profile.engine.active === 'sherpa'}
       <Field label="Sherpa model" for="profile-{index}-model">
         <Select
@@ -370,5 +411,18 @@
     color: var(--text-muted);
     border-color: var(--border);
     background: var(--bg-elevated);
+  }
+
+  textarea {
+    width: min(100%, 520px);
+    min-height: 88px;
+    resize: vertical;
+    padding: var(--space-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
   }
 </style>

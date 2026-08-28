@@ -14,7 +14,7 @@ use utter_core::{DictationMode, Tone};
 use utter_refine::Snippet;
 
 use crate::error::MigrateError;
-use crate::profile::{LanguageProfile, RefinePolicy};
+use crate::profile::{LanguageProfile, RecognitionCfg, RefinePolicy};
 use crate::settings::{
     Advanced, CloudSttCfg, Dictation, Dictionary, EngineCfg, EngineKind, General, HistoryCfg,
     RefineCfg, Settings,
@@ -60,6 +60,7 @@ pub fn migrate_v1(raw: &str) -> Result<Settings, MigrateError> {
         language,
         engine,
         draft: None,
+        recognition: RecognitionCfg::default(),
         refine: RefinePolicy {
             enabled: v1.refine.enabled,
             tone: v1.refine.tone,

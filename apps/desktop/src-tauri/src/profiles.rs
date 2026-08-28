@@ -42,6 +42,7 @@ use utter_inject::BindingId;
 use utter_store::settings::{refinement_is_on, RefineCfg};
 use utter_store::{LanguageProfile, ModelManager};
 
+use crate::recognition::initial_prompt_for;
 use crate::runtime_boot::{
     build_draft_engine, build_engine, build_refiner, engine_label, QueuedNotice,
 };
@@ -87,7 +88,9 @@ pub struct ProfileDeps {
     /// normal bilingual case, both on sherpa — can still be told apart; `engine_label` alone
     /// cannot do that.
     pub profile_id: String,
-    pub dictionary_terms: Vec<String>,
+    /// Complete prompt passed to the recognizer for each utterance: the
+    /// profile's model recipe or custom prompt plus global dictionary terms.
+    pub initial_prompt: Option<String>,
 }
 
 /// Turns one [`LanguageProfile`] into its [`ProfileDeps`], plus any
@@ -194,7 +197,7 @@ impl ProfileLoader for RealProfileLoader {
             language: (!profile.language.trim().is_empty()).then(|| profile.language.clone()),
             engine_label: engine_label(profile.engine.active).to_string(),
             profile_id: profile.id.clone(),
-            dictionary_terms: self.dictionary_terms.clone(),
+            initial_prompt: initial_prompt_for(profile, &self.dictionary_terms),
         };
 
         (deps, notices)
@@ -385,7 +388,7 @@ mod tests {
             language: None,
             engine_label: engine_label.to_string(),
             profile_id: engine_label.to_string(),
-            dictionary_terms: Vec::new(),
+            initial_prompt: None,
         }
     }
 

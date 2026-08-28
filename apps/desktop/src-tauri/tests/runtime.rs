@@ -522,7 +522,8 @@ impl DepsBuilder {
             language: self.language,
             engine_label: "fake-engine".to_string(),
             profile_id: "default".to_string(),
-            dictionary_terms: self.dictionary_terms,
+            initial_prompt: (!self.dictionary_terms.is_empty())
+                .then(|| self.dictionary_terms.join(", ")),
         };
         let profiles = registry_with(vec![(test_profile("default"), profile_deps)]);
 
@@ -602,7 +603,7 @@ fn profile_deps_with_transcript(text: &str) -> ProfileDeps {
         language: None,
         engine_label: "fake-engine".to_string(),
         profile_id: "fake-profile".to_string(),
-        dictionary_terms: Vec::new(),
+        initial_prompt: None,
     }
 }
 
