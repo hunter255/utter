@@ -80,9 +80,12 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          UTTER_UPDATER_PUBLIC_KEY: ${{ vars.UTTER_UPDATER_PUBLIC_KEY }}
         run: |
           missing=()
-          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD UTTER_UPDATER_PUBLIC_KEY; do
             if [[ -z "${!name:-}" ]]; then missing+=("$name"); fi
           done
           if (( ${#missing[@]} )); then
@@ -99,12 +102,15 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          UTTER_UPDATER_PUBLIC_KEY: ${{ vars.UTTER_UPDATER_PUBLIC_KEY }}
         with:
           projectPath: apps/desktop/src-tauri
           tagName: ${{ github.ref_name }}
           releaseName: "Utter ${{ github.ref_name }}"
           releaseDraft: true
-          args: --target aarch64-apple-darwin --bundles dmg --features sherpa,whisper-metal
+          args: --target aarch64-apple-darwin --bundles dmg --config tauri.updater.conf.json --features sherpa,whisper-metal,updater
       # Tauri notarizes and staples the .app before placing it in the DMG.
       # Submit the signed disk image as well so its own offline Gatekeeper
       # ticket is present; the first action upload is still an unpublished

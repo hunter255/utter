@@ -267,3 +267,8 @@ partial and has no state for one.
   engine/model IDs, safe permission states and at most 200 redacted log lines.
   Profile names, prompts, dictionary terms, provider endpoints, reset commands
   and all other settings have no serialization path into the report.
+- **Auto-update is a release-only adapter** — ordinary builds omit the Cargo
+  `updater` feature. Tagged macOS builds embed a public verification key while
+  the matching private key remains in the protected GitHub environment. The
+  desktop shell serializes check/install operations and delegates signature
+  verification and atomic replacement to Tauri's official updater plugin.

@@ -39,5 +39,23 @@ failed draft/tag only after preserving its logs, bump the version, and produce
 a new tag. Published artifacts are immutable; do not replace a DMG under an
 existing version.
 
-Auto-update artifacts use a separate Tauri signing key and are intentionally
-not part of this release-foundation change.
+Auto-update artifacts use a separate Tauri signing key, independent from the
+Apple Developer certificate. Generate it once on a trusted machine and store
+both files outside the repository:
+
+```sh
+apps/desktop/ui/node_modules/.bin/tauri signer generate \
+  --write-keys /secure/location/utter-updater.key
+```
+
+Keep multiple encrypted backups. Losing this private key means existing
+installations cannot trust any future update. Add its contents as the protected
+environment secret `TAURI_SIGNING_PRIVATE_KEY`, its password as
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, and the generated public key as the
+non-secret environment variable `UTTER_UPDATER_PUBLIC_KEY`.
+
+The macOS tag build is compiled with the release-only `updater` feature and
+`tauri.updater.conf.json`. Tauri signs the update archive, and `tauri-action`
+adds the archive, signature and `latest.json` to the same draft release. The
+application accepts only manifests and artifacts verified by the embedded
+public key; this signature check cannot be disabled.

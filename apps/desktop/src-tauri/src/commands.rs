@@ -491,6 +491,36 @@ pub async fn copy_diagnostics(app: AppHandle) -> Result<String, String> {
     .map_err(|e| format!("copy_diagnostics task failed to run: {e}"))?
 }
 
+#[cfg(feature = "updater")]
+#[tauri::command]
+pub async fn check_for_update(
+    app: AppHandle,
+    state: State<'_, crate::updater::UpdaterState>,
+) -> Result<crate::updater::UpdateCheck, String> {
+    crate::updater::check(app, &state).await
+}
+
+#[cfg(not(feature = "updater"))]
+#[tauri::command]
+pub async fn check_for_update() -> Result<crate::updater::UpdateCheck, String> {
+    Err("updates are available only in signed release builds".to_string())
+}
+
+#[cfg(feature = "updater")]
+#[tauri::command]
+pub async fn install_update(
+    app: AppHandle,
+    state: State<'_, crate::updater::UpdaterState>,
+) -> Result<(), String> {
+    crate::updater::install_and_restart(app, &state).await
+}
+
+#[cfg(not(feature = "updater"))]
+#[tauri::command]
+pub async fn install_update() -> Result<(), String> {
+    Err("updates are available only in signed release builds".to_string())
+}
+
 /// Returns compile-time platform support only; no I/O or OS prompt is involved.
 #[tauri::command]
 pub fn platform_capabilities() -> crate::platform::PlatformCapabilities {

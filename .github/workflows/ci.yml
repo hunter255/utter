@@ -29,6 +29,10 @@ jobs:
       # Default feature set (whisper.cpp + cloud STT) is the baseline gate.
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      - name: Clippy (release updater boundary)
+        run: cargo clippy -p utter-desktop --all-targets --features updater -- -D warnings
+      - name: Test (release updater boundary)
+        run: cargo test -p utter-desktop --features updater
       # `sherpa` is the primary offline engine but is feature-gated (its
       # build script downloads a prebuilt native archive from a GitHub
       # release, see crates/utter-stt/Cargo.toml); these steps cover it

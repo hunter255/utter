@@ -19,6 +19,7 @@ serde = { workspace = true }
 tauri = { version = "2.11", features = ["tray-icon"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-notification = "2"
+tauri-plugin-updater = { version = "2", optional = true }
 keyring = "4"
 regex = "1"
 serde_json = { workspace = true }
@@ -55,6 +56,9 @@ default = []
 # with `--features sherpa`.
 sherpa = ["utter-stt/sherpa"]
 whisper-metal = ["utter-stt/whisper-metal"]
+# Release-only updater support. Ordinary source/dev builds do not embed a
+# release public key and therefore cannot accidentally install artifacts.
+updater = ["dep:tauri-plugin-updater"]
 
 [dev-dependencies]
 tempfile = "3"

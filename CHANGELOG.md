@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Apple Silicon releases are emitted as a Developer ID-signed, notarized and
   stapled DMG, with explicit identity, architecture, minimum-system and
   Gatekeeper verification before a draft release can be published.
+- Protected macOS tag builds also create Tauri-signed update archives and a
+  GitHub Releases manifest. The release-only backend serializes checks and
+  installs, bounds release notes, reports download progress, verifies the
+  embedded public key and keeps a failed pending update available for retry.
 - Model catalog entries now describe final/preview role, supported languages,
   relative runtime cost, and recommendation tags. Onboarding exposes language
   selection alongside every final local model, while onboarding and profile
