@@ -170,7 +170,7 @@ mod tests {
 
     /// Manual, hardware-touching verification: requires a real focused text
     /// editor window and the process to have both `input`-group and
-    /// `/dev/uinput` permissions (see `crate::hotkey::check_permissions`).
+    /// `/dev/uinput` permissions (see `crate::hotkey::check_linux_permissions`).
     /// Run with: `cargo test -p utter-inject -- --ignored injects_into_focused_window`
     ///
     /// Linux-only: `ClipboardPasteInjector` is uninhabited on other

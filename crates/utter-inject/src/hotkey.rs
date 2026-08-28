@@ -339,7 +339,7 @@ pub fn create_source(specs: &[HotkeySpec]) -> anyhow::Result<Box<dyn HotkeySourc
 /// A snapshot of the OS-level permissions needed for evdev hotkeys and
 /// uinput-based text injection to work.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PermissionReport {
+pub struct LinuxPermissionReport {
     /// Whether at least one `/dev/input/event*` node is readable by the
     /// current user (a proxy for `input` group membership).
     pub input_group: bool,
@@ -349,7 +349,7 @@ pub struct PermissionReport {
     pub fix_command: String,
 }
 
-/// Raw probe results, kept separate from [`PermissionReport`] so the report
+/// Raw probe results, kept separate from [`LinuxPermissionReport`] so the report
 /// text can be built and tested as a pure function of the probe outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PermissionProbe {
@@ -367,8 +367,8 @@ const FIX_COMMAND: &str = concat!(
     "echo 'log out and back in for group membership to take effect'"
 );
 
-fn build_permission_report(probe: PermissionProbe) -> PermissionReport {
-    PermissionReport {
+fn build_permission_report(probe: PermissionProbe) -> LinuxPermissionReport {
+    LinuxPermissionReport {
         input_group: probe.input_group,
         uinput_writable: probe.uinput_writable,
         fix_command: FIX_COMMAND.to_string(),
@@ -377,7 +377,7 @@ fn build_permission_report(probe: PermissionProbe) -> PermissionReport {
 
 /// Checks whether this process can read evdev keyboard devices and write to
 /// `/dev/uinput`, the two permissions the Linux backend depends on.
-pub fn check_permissions() -> PermissionReport {
+pub fn check_linux_permissions() -> LinuxPermissionReport {
     build_permission_report(probe_permissions())
 }
 

@@ -20,11 +20,11 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use utter_core::{TextRefiner, Tone};
-use utter_inject::PermissionReport;
 use utter_refine::{LlmConfig, LlmRefiner};
 use utter_store::{HistoryEntry, ModelInfo, Settings};
 
 use crate::events::{ModelProgress, Notice};
+use crate::permissions::PermissionReport;
 use crate::state::AppState;
 use crate::{keyring_password, KEYRING_SERVICE, REFINE_KEY_SERVICE, STT_KEY_SERVICE};
 
@@ -366,12 +366,12 @@ pub async fn has_api_key(service: String) -> bool {
 
 #[tauri::command]
 pub async fn permissions_report() -> PermissionReport {
-    tauri::async_runtime::spawn_blocking(utter_inject::check_permissions)
+    tauri::async_runtime::spawn_blocking(crate::permissions::report)
         .await
         // Only reachable if the blocking task itself panicked; re-probing
         // synchronously here is a fallback for that exceptional path, not
         // the normal one (which never blocks the caller's own thread).
-        .unwrap_or_else(|_| utter_inject::check_permissions())
+        .unwrap_or_else(|_| crate::permissions::report())
 }
 
 #[tauri::command]

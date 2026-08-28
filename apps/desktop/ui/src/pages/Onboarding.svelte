@@ -113,7 +113,7 @@
   }
 
   async function copyFixCommand() {
-    if (!permissions) return
+    if (!permissions || permissions.platform !== 'linux') return
     try {
       await navigator.clipboard.writeText(permissions.fix_command)
       fixCopied = true
@@ -235,29 +235,36 @@
       />
     {:else if step === 4}
       <h1>Permissions</h1>
-      <p class="muted">Linux hotkeys and text injection need two OS-level permissions.</p>
       {#if permissionsError}
         <p class="error">{permissionsError}</p>
       {:else if permissions}
-        <ul class="perm-list">
-          <li>
-            <span class="perm-status" class:ok={permissions.input_group}>
-              {permissions.input_group ? '✓' : '✗'}
-            </span>
-            Input device group membership
-          </li>
-          <li>
-            <span class="perm-status" class:ok={permissions.uinput_writable}>
-              {permissions.uinput_writable ? '✓' : '✗'}
-            </span>
-            /dev/uinput writable
-          </li>
-        </ul>
-        {#if !permissions.input_group || !permissions.uinput_writable}
-          <pre class="fix-command">{permissions.fix_command}</pre>
-          <button type="button" onclick={copyFixCommand}>{fixCopied ? 'Copied' : 'Copy fix command'}</button>
+        {#if permissions.platform === 'linux'}
+          <p class="muted">Linux hotkeys and text injection need two OS-level permissions.</p>
+          <ul class="perm-list">
+            <li>
+              <span class="perm-status" class:ok={permissions.input_group}>
+                {permissions.input_group ? '✓' : '✗'}
+              </span>
+              Input device group membership
+            </li>
+            <li>
+              <span class="perm-status" class:ok={permissions.uinput_writable}>
+                {permissions.uinput_writable ? '✓' : '✗'}
+              </span>
+              /dev/uinput writable
+            </li>
+          </ul>
+          {#if !permissions.input_group || !permissions.uinput_writable}
+            <pre class="fix-command">{permissions.fix_command}</pre>
+            <button type="button" onclick={copyFixCommand}>{fixCopied ? 'Copied' : 'Copy fix command'}</button>
+          {:else}
+            <p class="ok">All required permissions are already granted.</p>
+          {/if}
         {:else}
-          <p class="ok">All required permissions are already granted.</p>
+          <p class="muted">
+            Permission setup for {permissions.os} is not available in this build yet. You can
+            continue and configure platform access later.
+          </p>
         {/if}
       {:else}
         <p class="muted">Checking…</p>
