@@ -5,7 +5,7 @@
 pub mod hotkey;
 pub use hotkey::{
     check_permissions, create_source, parse_hotkey, BindingId, HotkeyEvent, HotkeyParseError,
-    HotkeySource, HotkeySpec, PermissionReport,
+    HotkeyShortcutError, HotkeySource, HotkeySpec, PermissionReport,
 };
 
 pub mod chain;

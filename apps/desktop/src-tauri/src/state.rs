@@ -121,6 +121,10 @@ pub struct AppState {
     /// migration message out of the desktop-notification channel it currently
     /// reaches the user through.
     pub pending_notices: PendingNotices,
+    /// Main-event-loop global shortcut registrations and their current
+    /// runtime channel. macOS only; Linux keeps using `HotkeySource`.
+    #[cfg(target_os = "macos")]
+    pub macos_hotkeys: crate::macos_hotkeys::MacosHotkeys,
 }
 
 impl AppState {
@@ -161,6 +165,8 @@ impl AppState {
             hud_enabled,
             notice_throttle: Arc::new(NoticeThrottle::default()),
             pending_notices: PendingNotices::default(),
+            #[cfg(target_os = "macos")]
+            macos_hotkeys: crate::macos_hotkeys::MacosHotkeys::default(),
         })
     }
 }

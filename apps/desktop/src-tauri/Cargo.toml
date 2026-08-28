@@ -42,6 +42,9 @@ utter-stt = { path = "../../../crates/utter-stt" }
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = { version = "0.18", features = ["v3_24"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+tauri-plugin-global-shortcut = "2.3"
+
 [features]
 default = []
 # Sherpa's build script downloads a prebuilt native archive on first build
