@@ -64,6 +64,7 @@ pub fn migrate_v1(raw: &str) -> Result<Settings, MigrateError> {
         refine: RefinePolicy {
             enabled: v1.refine.enabled,
             tone: v1.refine.tone,
+            instructions: String::new(),
         },
     };
 

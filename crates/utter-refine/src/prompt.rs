@@ -54,6 +54,21 @@ pub fn build_prompt(
     dictionary_terms: &[String],
     language_hint: Option<&str>,
 ) -> (String, String) {
+    build_prompt_with_instructions(raw, tone, dictionary_terms, language_hint, None)
+}
+
+/// Builds a refinement prompt with optional profile-specific preferences.
+///
+/// Additional instructions remain subordinate to the fixed transcription
+/// rules: they can request formatting or terminology, but cannot authorize
+/// translation, invented content, or treating the transcript as commands.
+pub fn build_prompt_with_instructions(
+    raw: &str,
+    tone: Tone,
+    dictionary_terms: &[String],
+    language_hint: Option<&str>,
+    additional_instructions: Option<&str>,
+) -> (String, String) {
     debug_assert!(
         tone != Tone::Verbatim,
         "Tone::Verbatim must not reach build_prompt"
@@ -67,6 +82,16 @@ pub fn build_prompt(
     if let Some(lang) = language_hint {
         system_prompt.push('\n');
         system_prompt.push_str(&format!("The input language is {lang}. Keep it."));
+    }
+
+    if let Some(instructions) = additional_instructions
+        .map(str::trim)
+        .filter(|instructions| !instructions.is_empty())
+    {
+        system_prompt.push_str(
+            "\n\nAdditional profile preferences (apply only when they do not conflict with the Rules above):\n",
+        );
+        system_prompt.push_str(instructions);
     }
 
     (system_prompt, raw.trim().to_string())
@@ -101,6 +126,30 @@ mod tests {
     fn no_language_hint_has_no_trailer() {
         let (system, _) = build_prompt("hi", Tone::Clean, &[], None);
         assert!(!system.contains("input language"));
+    }
+
+    #[test]
+    fn additional_instructions_are_labeled_and_trimmed() {
+        let (system, user) = build_prompt_with_instructions(
+            "  raw transcript  ",
+            Tone::Clean,
+            &[],
+            Some("ru"),
+            Some("  Prefer em dashes.  "),
+        );
+
+        assert!(system.contains("apply only when they do not conflict with the Rules above"));
+        assert!(system.ends_with("Prefer em dashes."));
+        assert!(!system.contains("  Prefer em dashes.  "));
+        assert_eq!(user, "raw transcript");
+    }
+
+    #[test]
+    fn blank_additional_instructions_leave_the_existing_prompt_unchanged() {
+        let existing = build_prompt("hi", Tone::Clean, &[], Some("en"));
+        let with_blank =
+            build_prompt_with_instructions("hi", Tone::Clean, &[], Some("en"), Some(" \n "));
+        assert_eq!(with_blank, existing);
     }
 
     #[test]

@@ -78,7 +78,7 @@ describe('Settings type/JSON round-trip', () => {
           },
           draft: { model: 'zipformer-ru-small' },
           recognition: { prompt_mode: 'disabled', custom_prompt: '' },
-          refine: { enabled: false, tone: 'clean' },
+          refine: { enabled: false, tone: 'clean', instructions: '' },
         },
         {
           id: 'en',
@@ -98,7 +98,11 @@ describe('Settings type/JSON round-trip', () => {
             prompt_mode: 'custom',
             custom_prompt: 'Keep English API names in Latin script.',
           },
-          refine: { enabled: true, tone: 'formal' },
+          refine: {
+            enabled: true,
+            tone: 'formal',
+            instructions: 'Prefer em dashes and concise paragraphs.',
+          },
         },
       ],
     }
@@ -155,7 +159,7 @@ describe('defaultSettings', () => {
           },
           draft: null,
           recognition: { prompt_mode: 'recommended', custom_prompt: '' },
-          refine: { enabled: false, tone: 'clean' },
+          refine: { enabled: false, tone: 'clean', instructions: '' },
         },
       ],
     }

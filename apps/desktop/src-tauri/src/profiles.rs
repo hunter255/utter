@@ -173,8 +173,11 @@ impl ProfileLoader for RealProfileLoader {
         // the lazy-load path for a profile that will never use either.
         let refine_enabled = refinement_is_on(&self.global_refine, &profile.refine);
         let refiner: Option<Arc<dyn TextRefiner>> = if refine_enabled {
-            let (refiner, refiner_notice) =
-                build_refiner(&self.global_refine, self.dictionary_terms.clone());
+            let (refiner, refiner_notice) = build_refiner(
+                &self.global_refine,
+                self.dictionary_terms.clone(),
+                profile.refine.instructions.clone(),
+            );
             if let Some(msg) = refiner_notice {
                 notices.push(("info", msg));
             }
