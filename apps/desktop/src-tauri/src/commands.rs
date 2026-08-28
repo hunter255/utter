@@ -375,6 +375,33 @@ pub async fn permissions_report() -> PermissionReport {
 }
 
 #[tauri::command]
+pub async fn request_permission(app: AppHandle, kind: String) -> Result<PermissionReport, String> {
+    // Parse before entering any platform adapter so an unknown value can
+    // never accidentally trigger an OS prompt.
+    let kind = crate::permissions::PermissionKind::parse(&kind)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let report = crate::permissions::request(kind);
+
+        // ClipboardPasteInjector is included only when post-event access is
+        // present at construction time. Rebuild after the explicit request
+        // so a newly granted permission works without restarting the app.
+        if kind == crate::permissions::PermissionKind::TextInjection {
+            let state = app.state::<AppState>();
+            let settings = state
+                .settings
+                .read()
+                .map_err(|_| "settings lock poisoned".to_string())?
+                .clone();
+            crate::runtime_boot::rebuild(&app, &state, &settings)?;
+        }
+
+        Ok(report)
+    })
+    .await
+    .map_err(|e| format!("request_permission task failed to run: {e}"))?
+}
+
+#[tauri::command]
 pub async fn test_refine(app: AppHandle, sample: String) -> Result<String, String> {
     let result = tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();

@@ -8,11 +8,13 @@
 mod capture;
 mod error;
 mod level;
+mod permissions;
 mod resample;
 
 pub use capture::Capture;
 pub use error::AudioError;
 pub use level::{rms_level, SilenceDetector};
+pub use permissions::{microphone_permission, request_microphone_permission, MicrophonePermission};
 pub use resample::Resampler;
 
 /// A chunk of captured audio: 16 kHz mono `i16` samples, nominally ~100 ms
@@ -27,6 +29,11 @@ pub struct AudioFrame {
 /// Best-effort: returns an empty vector if the audio host cannot be queried
 /// (e.g. no audio subsystem is running) rather than propagating an error.
 pub fn list_input_devices() -> Vec<String> {
+    #[cfg(target_os = "macos")]
+    if microphone_permission() != MicrophonePermission::Granted {
+        return Vec::new();
+    }
+
     use cpal::traits::HostTrait;
 
     let host = cpal::default_host();

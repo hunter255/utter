@@ -25,6 +25,7 @@ import type {
   ModelProgressPayload,
   NoticePayload,
   PermissionReport,
+  PermissionKind,
   Settings,
 } from './types'
 
@@ -74,6 +75,10 @@ export function hasApiKey(service: ApiKeyService): Promise<boolean> {
 
 export function permissionsReport(): Promise<PermissionReport> {
   return invoke('permissions_report')
+}
+
+export function requestPermission(kind: PermissionKind): Promise<PermissionReport> {
+  return invoke('request_permission', { kind })
 }
 
 export function testRefine(sample: string): Promise<string> {

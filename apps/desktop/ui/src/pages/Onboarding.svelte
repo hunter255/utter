@@ -1,10 +1,11 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte'
+  import { getCurrentWindow } from '@tauri-apps/api/window'
 
   import HotkeyPicker from '../lib/components/HotkeyPicker.svelte'
   import * as api from '../lib/api'
   import { settingsStore } from '../lib/stores'
-  import type { ModelInfo, PermissionReport } from '../lib/types'
+  import type { ModelInfo, PermissionKind, PermissionReport, PermissionStatus } from '../lib/types'
 
   interface Props {
     onDone: () => void
@@ -102,6 +103,8 @@
   let permissions = $state<PermissionReport | null>(null)
   let permissionsError = $state('')
   let fixCopied = $state(false)
+  let permissionBusy = $state<PermissionKind | null>(null)
+  let unlistenFocus: (() => void) | undefined
 
   async function checkPermissions() {
     try {
@@ -110,6 +113,28 @@
     } catch (err) {
       permissionsError = String(err)
     }
+  }
+
+  async function requestPermission(kind: PermissionKind) {
+    permissionBusy = kind
+    permissionsError = ''
+    try {
+      permissions = await api.requestPermission(kind)
+      if (kind === 'microphone' && permissions.platform === 'macos' && permissions.microphone === 'granted') {
+        devicesChecked = false
+        await checkMic()
+      }
+    } catch (err) {
+      permissionsError = String(err)
+    } finally {
+      permissionBusy = null
+    }
+  }
+
+  function permissionMark(status: PermissionStatus): string {
+    if (status === 'granted') return '✓'
+    if (status === 'denied') return '✗'
+    return '•'
   }
 
   async function copyFixCommand() {
@@ -132,14 +157,25 @@
     }).then((fn) => {
       unlistenProgress = fn
     })
+    getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+      if (focused && permissions?.platform === 'macos') void checkPermissions()
+    }).then((fn) => {
+      unlistenFocus = fn
+    })
   })
 
   onDestroy(() => {
     unlistenProgress?.()
+    unlistenFocus?.()
   })
 
   $effect(() => {
-    if (step === 1 && !devicesChecked) void checkMic()
+    if (step === 1 && !permissions && !permissionsError) void checkPermissions()
+    if (
+      step === 1 &&
+      !devicesChecked &&
+      (permissions?.platform !== 'macos' || permissions.microphone === 'granted')
+    ) void checkMic()
     if (step === 4 && !permissions && !permissionsError) void checkPermissions()
   })
 </script>
@@ -157,25 +193,43 @@
       <p>A quick, skippable setup: microphone, a speech model, your hotkey, and permissions.</p>
     {:else if step === 1}
       <h1>Microphone</h1>
-      <p class="muted">
-        This only confirms your system reports an input device — it can't test live recording
-        from this wizard.
-      </p>
-      {#if devicesError}
-        <p class="error">{devicesError}</p>
-      {:else if devicesChecked}
-        {#if devices.length === 0}
-          <p class="warn">No input devices were found. Check your microphone connection.</p>
+      {#if permissions?.platform === 'macos' && permissions.microphone !== 'granted'}
+        <p class="muted">Utter needs microphone access to record speech for transcription.</p>
+        {#if permissions.microphone === 'not_determined'}
+          <button
+            type="button"
+            onclick={() => requestPermission('microphone')}
+            disabled={permissionBusy !== null}
+          >{permissionBusy === 'microphone' ? 'Requesting…' : 'Allow microphone'}</button>
+        {:else if permissions.microphone === 'denied'}
+          <p class="warn">
+            Microphone access is off. Enable Utter in System Settings → Privacy & Security →
+            Microphone, then return here.
+          </p>
         {:else}
-          <p>Found {devices.length} input device{devices.length === 1 ? '' : 's'}:</p>
-          <ul>
-            {#each devices as device (device)}
-              <li>{device}</li>
-            {/each}
-          </ul>
+          <p class="warn">Microphone permission is unavailable on this Mac.</p>
         {/if}
       {:else}
-        <p class="muted">Checking…</p>
+        <p class="muted">
+          This confirms your system reports an input device; live recording is tested when you
+          dictate.
+        </p>
+        {#if devicesError}
+          <p class="error">{devicesError}</p>
+        {:else if devicesChecked}
+          {#if devices.length === 0}
+            <p class="warn">No input devices were found. Check your microphone connection.</p>
+          {:else}
+            <p>Found {devices.length} input device{devices.length === 1 ? '' : 's'}:</p>
+            <ul>
+              {#each devices as device (device)}
+                <li>{device}</li>
+              {/each}
+            </ul>
+          {/if}
+        {:else}
+          <p class="muted">Checking…</p>
+        {/if}
       {/if}
     {:else if step === 2}
       <h1>Speech model</h1>
@@ -259,6 +313,49 @@
             <button type="button" onclick={copyFixCommand}>{fixCopied ? 'Copied' : 'Copy fix command'}</button>
           {:else}
             <p class="ok">All required permissions are already granted.</p>
+          {/if}
+        {:else if permissions.platform === 'macos'}
+          <p class="muted">
+            These permissions are requested only when you press an Allow button. You can
+            continue with reduced functionality if either remains off.
+          </p>
+          <ul class="perm-list">
+            <li>
+              <span class="perm-status" class:ok={permissions.microphone === 'granted'}>
+                {permissionMark(permissions.microphone)}
+              </span>
+              Microphone — {permissions.microphone.replace('_', ' ')}
+              {#if permissions.microphone === 'not_determined'}
+                <button
+                  type="button"
+                  onclick={() => requestPermission('microphone')}
+                  disabled={permissionBusy !== null}
+                >{permissionBusy === 'microphone' ? 'Requesting…' : 'Allow'}</button>
+              {/if}
+            </li>
+            <li>
+              <span class="perm-status" class:ok={permissions.text_injection === 'granted'}>
+                {permissionMark(permissions.text_injection)}
+              </span>
+              Paste into other apps — {permissions.text_injection.replace('_', ' ')}
+              {#if permissions.text_injection === 'not_determined'}
+                <button
+                  type="button"
+                  onclick={() => requestPermission('text_injection')}
+                  disabled={permissionBusy !== null}
+                >{permissionBusy === 'text_injection' ? 'Requesting…' : 'Allow'}</button>
+              {/if}
+            </li>
+          </ul>
+          {#if permissions.microphone === 'denied' || permissions.text_injection === 'denied'}
+            <p class="warn">
+              Enable the denied access in System Settings → Privacy & Security, then return to
+              Utter and check again. Dictation needs Microphone; automatic paste needs
+              Accessibility.
+            </p>
+            <button type="button" onclick={checkPermissions}>Check again</button>
+          {:else if permissions.microphone === 'granted' && permissions.text_injection === 'granted'}
+            <p class="ok">All required permissions are granted.</p>
           {/if}
         {:else}
           <p class="muted">
