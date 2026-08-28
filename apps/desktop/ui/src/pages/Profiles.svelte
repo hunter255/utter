@@ -143,7 +143,7 @@
       },
       draft: null,
       recognition: { prompt_mode: 'recommended', custom_prompt: '' },
-      refine: { enabled: false, tone: 'clean' },
+      refine: { enabled: false, tone: 'clean', instructions: '' },
     }
     settingsStore.patch({ profiles: [...settings.profiles, newProfile] })
   }
@@ -371,6 +371,20 @@
             (v) => updateProfile(index, { refine: { tone: v as Tone } })
           }
         />
+      </Field>
+      <Field
+        label="Refinement instructions"
+        for="profile-{index}-refine-instructions"
+        hint="Optional editing preferences for the LLM pass, for example punctuation or formatting. Built-in rules still preserve meaning and language."
+      >
+        <textarea
+          id="profile-{index}-refine-instructions"
+          rows="4"
+          bind:value={
+            () => profile.refine.instructions,
+            (v) => updateProfile(index, { refine: { instructions: v } })
+          }
+        ></textarea>
       </Field>
     {/if}
 

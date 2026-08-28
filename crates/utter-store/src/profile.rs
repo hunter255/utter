@@ -101,6 +101,9 @@ pub struct DraftCfg {
 pub struct RefinePolicy {
     pub enabled: bool,
     pub tone: Tone,
+    /// Optional profile-specific preferences for the LLM editing pass. These
+    /// do not affect speech recognition.
+    pub instructions: String,
 }
 
 impl Default for RefinePolicy {
@@ -108,6 +111,7 @@ impl Default for RefinePolicy {
         Self {
             enabled: false,
             tone: Tone::Clean,
+            instructions: String::new(),
         }
     }
 }
@@ -121,6 +125,26 @@ mod tests {
         // The default engine emits punctuation and casing itself, so there is
         // nothing for a refiner to fix on a fresh install.
         assert!(!RefinePolicy::default().enabled);
+        assert!(RefinePolicy::default().instructions.is_empty());
+    }
+
+    #[test]
+    fn refinement_instructions_round_trip_through_toml() {
+        let policy = RefinePolicy {
+            enabled: true,
+            tone: Tone::Formal,
+            instructions: "Prefer em dashes and short paragraphs.".to_string(),
+        };
+        let text = toml::to_string(&policy).expect("serialize");
+        let parsed: RefinePolicy = toml::from_str(&text).expect("deserialize");
+        assert_eq!(parsed, policy);
+    }
+
+    #[test]
+    fn older_refinement_policy_defaults_missing_instructions_to_empty() {
+        let policy: RefinePolicy =
+            toml::from_str("enabled = true\ntone = \"clean\"").expect("deserialize old policy");
+        assert!(policy.instructions.is_empty());
     }
 
     #[test]

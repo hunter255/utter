@@ -66,6 +66,7 @@ export interface RefineCfg {
 export interface RefinePolicy {
   enabled: boolean
   tone: Tone
+  instructions: string
 }
 
 /** `crates/utter-store/src/profile.rs::DraftCfg` */
@@ -203,6 +204,7 @@ export function defaultSettings(): Settings {
         refine: {
           enabled: false,
           tone: 'clean',
+          instructions: '',
         },
       },
     ],

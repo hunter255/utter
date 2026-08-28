@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use serde_json::json;
 use utter_core::{RefineError, TextRefiner, Tone};
-use utter_refine::{build_prompt, LlmConfig, LlmRefiner};
+use utter_refine::{build_prompt_with_instructions, LlmConfig, LlmRefiner};
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -24,7 +24,14 @@ fn config(base_url: String) -> LlmConfig {
 #[tokio::test(flavor = "multi_thread")]
 async fn happy_path_returns_refined_text_and_sends_expected_body() {
     let server = MockServer::start().await;
-    let (system, user) = build_prompt("so um hello there", Tone::Clean, &[], None);
+    let instructions = "Prefer em dashes.";
+    let (system, user) = build_prompt_with_instructions(
+        "so um hello there",
+        Tone::Clean,
+        &[],
+        None,
+        Some(instructions),
+    );
 
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
@@ -47,7 +54,8 @@ async fn happy_path_returns_refined_text_and_sends_expected_body() {
 
     let cfg = config(server.uri());
     let result = tokio::task::spawn_blocking(move || {
-        let refiner = LlmRefiner::new(cfg, Vec::new()).expect("build refiner");
+        let refiner = LlmRefiner::new_with_instructions(cfg, Vec::new(), instructions.to_string())
+            .expect("build refiner");
         refiner.refine("so um hello there", Tone::Clean)
     })
     .await

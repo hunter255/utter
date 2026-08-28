@@ -691,6 +691,7 @@ fn refine_missing_key_notice(has_key: bool) -> Option<String> {
 pub(crate) fn build_refiner(
     cfg: &RefineCfg,
     dictionary_terms: Vec<String>,
+    additional_instructions: String,
 ) -> (Option<Box<dyn TextRefiner>>, Option<String>) {
     if !refine_configured(cfg) {
         return (None, None);
@@ -705,7 +706,7 @@ pub(crate) fn build_refiner(
     // built during boot; once they are built per profile on the dictation
     // worker, the same panic would take the worker down and every profile's
     // dictation with it.
-    let refiner = match LlmRefiner::new(
+    let refiner = match LlmRefiner::new_with_instructions(
         LlmConfig {
             base_url: cfg.base_url.clone(),
             api_key,
@@ -713,6 +714,7 @@ pub(crate) fn build_refiner(
             timeout: Duration::from_secs(cfg.timeout_secs),
         },
         dictionary_terms,
+        additional_instructions,
     ) {
         Ok(refiner) => refiner,
         Err(e) => {

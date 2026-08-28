@@ -460,6 +460,7 @@ mod tests {
                 refine: RefinePolicy {
                     enabled: false,
                     tone: Tone::Clean,
+                    instructions: String::new(),
                 },
             }],
             ..Settings::default()

@@ -9,7 +9,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use utter_core::{RefineError, TextRefiner, Tone};
 
-use crate::build_prompt;
+use crate::build_prompt_with_instructions;
 
 /// Maximum bytes of a non-2xx response body echoed back in `RefineError::Http`.
 const ERROR_BODY_TRUNCATE_LEN: usize = 200;
@@ -28,6 +28,7 @@ pub struct LlmRefiner {
     client: reqwest::blocking::Client,
     config: LlmConfig,
     dictionary_terms: Vec<String>,
+    additional_instructions: String,
 }
 
 impl LlmRefiner {
@@ -43,6 +44,15 @@ impl LlmRefiner {
     /// exactly the "load that poisons the whole registry" failure isolation
     /// is meant to prevent. Callers degrade to "no refiner" instead.
     pub fn new(cfg: LlmConfig, dictionary_terms: Vec<String>) -> Result<Self, reqwest::Error> {
+        Self::new_with_instructions(cfg, dictionary_terms, String::new())
+    }
+
+    /// Builds a refiner with profile-specific editing preferences.
+    pub fn new_with_instructions(
+        cfg: LlmConfig,
+        dictionary_terms: Vec<String>,
+        additional_instructions: String,
+    ) -> Result<Self, reqwest::Error> {
         let connect_timeout = cfg.timeout.min(Duration::from_secs(5));
         let client = reqwest::blocking::Client::builder()
             .timeout(cfg.timeout)
@@ -53,6 +63,7 @@ impl LlmRefiner {
             client,
             config: cfg,
             dictionary_terms,
+            additional_instructions: additional_instructions.trim().to_string(),
         })
     }
 }
@@ -92,7 +103,13 @@ impl TextRefiner for LlmRefiner {
             return Ok(text.to_string());
         }
 
-        let (system, user) = build_prompt(text, tone, &self.dictionary_terms, None);
+        let (system, user) = build_prompt_with_instructions(
+            text,
+            tone,
+            &self.dictionary_terms,
+            None,
+            Some(&self.additional_instructions),
+        );
         let request_body = ChatRequest {
             model: &self.config.model,
             messages: [

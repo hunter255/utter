@@ -7,7 +7,7 @@ pub mod snippets;
 pub use snippets::{match_snippet, normalize, Snippet};
 
 pub mod prompt;
-pub use prompt::build_prompt;
+pub use prompt::{build_prompt, build_prompt_with_instructions};
 
 pub mod llm;
 pub use llm::{LlmConfig, LlmRefiner};
