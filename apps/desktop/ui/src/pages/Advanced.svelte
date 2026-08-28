@@ -7,7 +7,11 @@
   import Slider from '../lib/components/Slider.svelte'
   import * as api from '../lib/api'
   import { settingsStore } from '../lib/stores'
-  import type { InjectionPreference, PlatformCapabilities } from '../lib/types'
+  import type {
+    InjectionPreference,
+    PermissionStatus,
+    PlatformCapabilities,
+  } from '../lib/types'
 
   interface Props {
     capabilities: PlatformCapabilities
@@ -37,8 +41,36 @@
 
   let devices = $state<string[]>([])
   let devicesError = $state('')
+  let microphonePermission = $state<PermissionStatus | null>(null)
+  let permissionBusy = $state(false)
+  let permissionError = $state('')
+
+  async function refreshMicrophonePermission() {
+    if (capabilities.os !== 'macos') return
+    try {
+      const report = await api.permissionsReport()
+      if (report.platform === 'macos') microphonePermission = report.microphone
+      permissionError = ''
+    } catch (err) {
+      permissionError = String(err)
+    }
+  }
+
+  async function requestMicrophonePermission() {
+    permissionBusy = true
+    permissionError = ''
+    try {
+      const report = await api.requestPermission('microphone')
+      if (report.platform === 'macos') microphonePermission = report.microphone
+    } catch (err) {
+      permissionError = String(err)
+    } finally {
+      permissionBusy = false
+    }
+  }
 
   onMount(async () => {
+    void refreshMicrophonePermission()
     try {
       devices = await api.listDevices()
     } catch (err) {
@@ -84,6 +116,33 @@
     />
   </Field>
 
+  {#if capabilities.os === 'macos'}
+    <Field
+      label="Microphone permission"
+      hint="macOS should ask once and remember the answer for this signed app identity."
+    >
+      {#if permissionError}
+        <p class="error">{permissionError}</p>
+      {:else if microphonePermission === null}
+        <p class="muted">Checking…</p>
+      {:else}
+        <p class:ok={microphonePermission === 'granted'}>
+          Status: {microphonePermission.replace('_', ' ')}
+        </p>
+        {#if microphonePermission === 'not_determined'}
+          <button type="button" onclick={requestMicrophonePermission} disabled={permissionBusy}>
+            {permissionBusy ? 'Requesting…' : 'Allow microphone'}
+          </button>
+        {:else if microphonePermission === 'denied'}
+          <p class="warning">
+            Enable Utter in System Settings → Privacy & Security → Microphone, then check again.
+          </p>
+          <button type="button" onclick={refreshMicrophonePermission}>Check again</button>
+        {/if}
+      {/if}
+    </Field>
+  {/if}
+
   <Field
     label="Voice activity sensitivity"
     for="vad"
@@ -122,5 +181,14 @@
   .warning {
     color: var(--warning);
     font-size: 13px;
+  }
+
+  .muted {
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .ok {
+    color: var(--success);
   }
 </style>

@@ -163,6 +163,28 @@ cargo tauri dev     # run in development
 cargo tauri build   # produce a release bundle
 ```
 
+On macOS, use the repository helper for permission-sensitive testing:
+
+```sh
+./scripts/build-macos-dev.sh
+open target/release/bundle/macos/Utter.app
+```
+
+It signs the completed local bundle with a stable development requirement, so
+macOS can remember Microphone and Accessibility grants across rebuilds. The
+first run after switching from an unsigned build asks once more; later builds
+keep the same identity. The default signature is local-only and must not be
+distributed. If an Apple Development or self-signed Code Signing identity is
+already installed in Keychain, use the stronger form:
+
+```sh
+UTTER_DEV_SIGNING_IDENTITY="Certificate Name" ./scripts/build-macos-dev.sh
+```
+
+Raw `cargo tauri dev` executables are rebuilt in place without an application
+bundle signature, so macOS may treat each changed binary as a new privacy
+client. Use the helper above when testing the microphone or text injection.
+
 The `sherpa` engine links sherpa-onnx statically; its build script downloads
 a prebuilt native archive on first build, so building with `--features
 sherpa` (`cargo tauri dev --features sherpa` /
