@@ -15,6 +15,24 @@ import type { ModelInfo } from './types'
  * round. */
 export const PREVIEW_ENGINE = 'sherpa-streaming'
 
+/** Catalog entries that can produce the final transcript inserted into the
+ * focused app. Streaming preview entries are intentionally excluded. */
+export function transcriptionModels(models: ModelInfo[]): ModelInfo[] {
+  return models.filter((m) => m.engine === 'whisper' || m.engine === 'sherpa')
+}
+
+/** Flat options for a picker that spans both local transcription engines.
+ * Prefixing the engine keeps similarly named models unambiguous without
+ * teaching the shared Select component about groups. */
+export function transcriptionModelOptions(
+  models: ModelInfo[],
+): { value: string; label: string }[] {
+  return transcriptionModels(models).map((m) => ({
+    value: m.id,
+    label: `${m.engine === 'whisper' ? 'Whisper' : 'Sherpa-onnx'} — ${m.label} — ${m.size_mb} MB${m.installed ? ' — installed' : ''}`,
+  }))
+}
+
 /** Every streaming preview model in `models`, in catalog order. */
 export function previewModels(models: ModelInfo[]): ModelInfo[] {
   return models.filter((m) => m.engine === PREVIEW_ENGINE)
