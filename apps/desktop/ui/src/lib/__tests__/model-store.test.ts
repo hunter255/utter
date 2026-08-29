@@ -26,6 +26,7 @@ const MODEL: ModelInfo = {
   label: 'GigaAM',
   size_mb: 500,
   installed: false,
+  status: 'missing',
   supported_languages: ['ru'],
   role: 'final',
   performance_class: 'fast',
@@ -153,6 +154,33 @@ describe('model store', () => {
     await installing
     expect(get(store).operation).toBeNull()
     expect(backend.listModels).toHaveBeenCalledTimes(2)
+  })
+
+  it('reserves the global operation while settings are prepared before download', async () => {
+    const prepare = deferred<void>()
+    const store = createModelStore(backend)
+    await store.start()
+
+    const installing = store.install('giga', () => prepare.promise)
+    expect(get(store).pending).toEqual({ id: 'giga', kind: 'download' })
+    expect(backend.downloadModel).not.toHaveBeenCalled()
+
+    prepare.resolve()
+    await installing
+    expect(backend.downloadModel).toHaveBeenCalledWith('giga')
+  })
+
+  it('does not start a download when saving the selected model fails', async () => {
+    const store = createModelStore(backend)
+    await store.start()
+
+    await store.install('giga', async () => {
+      throw new Error('settings are read-only')
+    })
+
+    expect(backend.downloadModel).not.toHaveBeenCalled()
+    expect(get(store).pending).toBeNull()
+    expect(get(store).error).toContain('settings are read-only')
   })
 
   it('marks cancellation immediately and restores the prior phase on failure', async () => {

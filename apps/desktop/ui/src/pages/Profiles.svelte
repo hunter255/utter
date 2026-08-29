@@ -1,15 +1,19 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
-
   import Section from '../lib/components/Section.svelte'
   import Field from '../lib/components/Field.svelte'
+  import ModelInstallAction from '../lib/components/ModelInstallAction.svelte'
   import Select from '../lib/components/Select.svelte'
   import TextInput from '../lib/components/TextInput.svelte'
   import Toggle from '../lib/components/Toggle.svelte'
   import HotkeyPicker from '../lib/components/HotkeyPicker.svelte'
-  import * as api from '../lib/api'
   import { chordsConflict, hasBaseKey, parseChordTokens } from '../lib/hotkey'
-  import { modelCapabilityLabel, modelLanguageWarning, previewModelOptions } from '../lib/models'
+  import { modelStore } from '../lib/model-store'
+  import {
+    modelAvailabilityLabel,
+    modelCapabilityLabel,
+    modelLanguageWarning,
+    previewModelOptions,
+  } from '../lib/models'
   import { mergeDeep, settingsStore, type DeepPartial } from '../lib/stores'
   import type {
     EngineKind,
@@ -57,31 +61,29 @@
     { value: 'whisper-1', label: 'Whisper 1' },
   ]
 
-  let models = $state<ModelInfo[]>([])
-  let modelsError = $state('')
+  let models = $derived($modelStore.models)
+  let modelsError = $derived($modelStore.error)
 
   let whisperOptions = $derived(
     models
       .filter((m) => m.role === 'final' && m.engine === 'whisper')
-      .map((m) => ({ value: m.id, label: `${m.label} — ${modelCapabilityLabel(m)}` })),
+      .map((m) => ({
+        value: m.id,
+        label: `${m.label} — ${modelCapabilityLabel(m)} — ${modelAvailabilityLabel(m)}`,
+      })),
   )
   let sherpaOptions = $derived([
     { value: '', label: 'None selected' },
     ...models
       .filter((m) => m.role === 'final' && m.engine === 'sherpa')
-      .map((m) => ({ value: m.id, label: `${m.label} — ${modelCapabilityLabel(m)}` })),
+      .map((m) => ({
+        value: m.id,
+        label: `${m.label} — ${modelCapabilityLabel(m)} — ${modelAvailabilityLabel(m)}`,
+      })),
   ])
   // Streaming models only, never the engine models above — see
   // `previewModelOptions`, which is where that separation is pinned.
   let previewOptions = $derived(previewModelOptions(models))
-
-  onMount(async () => {
-    try {
-      models = await api.listModels()
-    } catch (err) {
-      modelsError = String(err)
-    }
-  })
 
   // Every profile's hotkey, parsed into the token set `chordsConflict`
   // compares — `null` for a chord that would fail to parse on the Rust side
@@ -273,6 +275,10 @@
             (v) => updateProfile(index, { engine: { whisper_model: v } })
           }
         />
+        <ModelInstallAction
+          model={activeModel(profile)}
+          beforeInstall={() => settingsStore.flush()}
+        />
       </Field>
     {:else if profile.engine.active === 'sherpa'}
       <Field label="Sherpa model" for="profile-{index}-model">
@@ -283,6 +289,10 @@
             () => profile.engine.sherpa_model ?? '',
             (v) => updateProfile(index, { engine: { sherpa_model: v === '' ? null : v } })
           }
+        />
+        <ModelInstallAction
+          model={activeModel(profile)}
+          beforeInstall={() => settingsStore.flush()}
         />
       </Field>
     {:else}
@@ -366,7 +376,7 @@
     <Field
       label="Live preview"
       for="profile-{index}-preview"
-      hint="A streaming model that shows words in the HUD while you speak. The inserted text always comes from the engine above, never from this. Off by default. Download the model on the Engines page first — one selected before it is downloaded stays silent until settings are next saved or the app restarts."
+      hint="A streaming model that shows provisional words in the HUD while you speak. The inserted text always comes from the engine above. Off by default."
     >
       <Select
         id="profile-{index}-preview"
@@ -375,6 +385,10 @@
           () => profile.draft?.model ?? '',
           (v) => updateProfile(index, { draft: v === '' ? null : { model: v } })
         }
+      />
+      <ModelInstallAction
+        model={draftModel(profile)}
+        beforeInstall={() => settingsStore.flush()}
       />
       {#if draftLanguageWarning(profile)}
         <p class="warning">{draftLanguageWarning(profile)}</p>

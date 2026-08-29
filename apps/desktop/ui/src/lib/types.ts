@@ -253,6 +253,7 @@ export function deepEqual(a: unknown, b: unknown): boolean {
 export type ModelRole = 'final' | 'preview'
 export type PerformanceClass = 'fast' | 'balanced' | 'heavy'
 export type ModelDownloadOutcome = 'installed' | 'cancelled'
+export type ModelInstallStatus = 'missing' | 'ready' | 'damaged'
 
 export interface ModelInfo {
   id: string
@@ -260,6 +261,7 @@ export interface ModelInfo {
   label: string
   size_mb: number
   installed: boolean
+  status: ModelInstallStatus
   /** BCP-47 prefixes; `*` means broadly multilingual. */
   supported_languages: string[]
   role: ModelRole

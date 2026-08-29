@@ -4,6 +4,7 @@
 
   import HotkeyPicker from '../lib/components/HotkeyPicker.svelte'
   import MacosPermissionRecovery from '../lib/components/MacosPermissionRecovery.svelte'
+  import ModelInstallAction from '../lib/components/ModelInstallAction.svelte'
   import Select from '../lib/components/Select.svelte'
   import * as api from '../lib/api'
   import { hasBaseKey, parseChordTokens } from '../lib/hotkey'
@@ -67,17 +68,9 @@
   // --- Step: model ---
   let models = $derived($modelStore.models)
   let modelsError = $derived($modelStore.error)
-  let operation = $derived($modelStore.operation)
-  let pending = $derived($modelStore.pending)
-  let activeDownloadId = $derived(
-    operation?.kind === 'download'
-      ? operation.id
-      : pending?.kind === 'download'
-        ? pending.id
-        : null,
+  let operationBusy = $derived(
+    $modelStore.operation !== null || $modelStore.pending !== null,
   )
-  let cancellingDownload = $derived(operation?.phase === 'cancelling')
-  let operationBusy = $derived(operation !== null || pending !== null)
 
   // A fresh profile starts on sherpa, but onboarding is where users should be able to choose
   // either final-transcript engine. Streaming preview models stay out of this list because they
@@ -131,20 +124,6 @@
         index === 0 ? { ...candidate, engine } : candidate,
       ),
     })
-  }
-
-  function progressPercent(id: string): number | null {
-    const p = operation?.id === id ? operation : null
-    if (!p || p.total <= 0) return null
-    return Math.min(100, Math.round((p.done / p.total) * 100))
-  }
-
-  async function install(id: string) {
-    await modelStore.install(id)
-  }
-
-  async function cancelDownload(id: string) {
-    await modelStore.cancel(id)
   }
 
   // --- Step: permissions ---
@@ -329,31 +308,11 @@
                   {modelCapabilityLabel(selectedModel)} · {selectedModel.size_mb} MB
                 </span>
               </div>
-              {#if selectedModel.installed}
-                <span class="badge">Installed</span>
-              {:else if activeDownloadId === selectedModel.id}
-                <button
-                  type="button"
-                  class="cancel"
-                  onclick={() => cancelDownload(selectedModel.id)}
-                  disabled={cancellingDownload}
-                >{cancellingDownload ? 'Cancelling…' : 'Cancel'}</button>
-              {:else}
-                <button
-                  type="button"
-                  onclick={() => install(selectedModel.id)}
-                  disabled={operationBusy}
-                >Install</button>
-              {/if}
             </div>
-            {#if activeDownloadId === selectedModel.id}
-              <div class="progress-track">
-                <div
-                  class="progress-fill"
-                  style:width="{progressPercent(selectedModel.id) ?? 0}%"
-                ></div>
-              </div>
-            {/if}
+            <ModelInstallAction
+              model={selectedModel}
+              beforeInstall={() => settingsStore.flush()}
+            />
           </li>
         </ul>
         {#if selectedModelInstalled}
@@ -637,29 +596,6 @@
     color: var(--text-muted);
   }
 
-  .badge {
-    font-size: 11px;
-    font-weight: 600;
-    padding: 2px var(--space-2);
-    border-radius: 999px;
-    background: var(--success);
-    color: var(--accent-contrast);
-  }
-
-  .progress-track {
-    margin-top: var(--space-2);
-    height: 6px;
-    border-radius: 999px;
-    background: var(--bg-sunken);
-    overflow: hidden;
-  }
-
-  .progress-fill {
-    height: 100%;
-    background: var(--accent);
-    transition: width 150ms ease;
-  }
-
   .perm-list {
     list-style: none;
     padding: 0;
@@ -716,10 +652,6 @@
   button:disabled {
     opacity: 0.55;
     cursor: not-allowed;
-  }
-
-  button.cancel {
-    color: var(--danger);
   }
 
   button.primary {

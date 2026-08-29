@@ -96,11 +96,6 @@
           <div class="model-actions">
             {#if activeRemoveId === model.id}
               <button type="button" disabled>Removing…</button>
-            {:else if model.installed}
-              <span class="badge badge-installed">Installed</span>
-              <button type="button" onclick={() => remove(model.id)} disabled={operationBusy}>
-                Remove
-              </button>
             {:else if activeDownloadId === model.id}
               <button
                 type="button"
@@ -108,9 +103,17 @@
                 onclick={() => cancelDownload(model.id)}
                 disabled={cancellingDownload}
               >{cancellingDownload ? 'Cancelling…' : 'Cancel'}</button>
+            {:else if model.status === 'ready'}
+              <span class="badge badge-installed">Installed</span>
+              <button type="button" onclick={() => remove(model.id)} disabled={operationBusy}>
+                Remove
+              </button>
             {:else}
+              {#if model.status === 'damaged'}
+                <span class="badge badge-damaged">Damaged</span>
+              {/if}
               <button type="button" onclick={() => install(model.id)} disabled={operationBusy}>
-                Install
+                {model.status === 'damaged' ? 'Re-download' : 'Install'}
               </button>
             {/if}
           </div>
@@ -137,11 +140,6 @@
           <div class="model-actions">
             {#if activeRemoveId === model.id}
               <button type="button" disabled>Removing…</button>
-            {:else if model.installed}
-              <span class="badge badge-installed">Installed</span>
-              <button type="button" onclick={() => remove(model.id)} disabled={operationBusy}>
-                Remove
-              </button>
             {:else if activeDownloadId === model.id}
               <button
                 type="button"
@@ -149,9 +147,17 @@
                 onclick={() => cancelDownload(model.id)}
                 disabled={cancellingDownload}
               >{cancellingDownload ? 'Cancelling…' : 'Cancel'}</button>
+            {:else if model.status === 'ready'}
+              <span class="badge badge-installed">Installed</span>
+              <button type="button" onclick={() => remove(model.id)} disabled={operationBusy}>
+                Remove
+              </button>
             {:else}
+              {#if model.status === 'damaged'}
+                <span class="badge badge-damaged">Damaged</span>
+              {/if}
               <button type="button" onclick={() => install(model.id)} disabled={operationBusy}>
-                Install
+                {model.status === 'damaged' ? 'Re-download' : 'Install'}
               </button>
             {/if}
           </div>
@@ -178,11 +184,6 @@
           <div class="model-actions">
             {#if activeRemoveId === model.id}
               <button type="button" disabled>Removing…</button>
-            {:else if model.installed}
-              <span class="badge badge-installed">Installed</span>
-              <button type="button" onclick={() => remove(model.id)} disabled={operationBusy}>
-                Remove
-              </button>
             {:else if activeDownloadId === model.id}
               <button
                 type="button"
@@ -190,9 +191,17 @@
                 onclick={() => cancelDownload(model.id)}
                 disabled={cancellingDownload}
               >{cancellingDownload ? 'Cancelling…' : 'Cancel'}</button>
+            {:else if model.status === 'ready'}
+              <span class="badge badge-installed">Installed</span>
+              <button type="button" onclick={() => remove(model.id)} disabled={operationBusy}>
+                Remove
+              </button>
             {:else}
+              {#if model.status === 'damaged'}
+                <span class="badge badge-damaged">Damaged</span>
+              {/if}
               <button type="button" onclick={() => install(model.id)} disabled={operationBusy}>
-                Install
+                {model.status === 'damaged' ? 'Re-download' : 'Install'}
               </button>
             {/if}
           </div>
@@ -310,6 +319,11 @@
   .badge-missing {
     background: var(--bg-sunken);
     color: var(--text-muted);
+  }
+
+  .badge-damaged {
+    background: var(--danger);
+    color: var(--accent-contrast);
   }
 
   .progress-track {

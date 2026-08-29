@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   modelCapabilityLabel,
+  modelAvailabilityLabel,
   modelLanguageWarning,
   modelSupportsLanguage,
   previewModelOptions,
@@ -26,6 +27,7 @@ function model(
     label: `${id} label`,
     size_mb: 1,
     installed,
+    status: installed ? 'ready' : 'missing',
     role: engine === 'sherpa-streaming' ? 'preview' : 'final',
     supported_languages: ['*'],
     performance_class: 'fast',
@@ -116,12 +118,12 @@ describe('previewModelOptions', () => {
       { value: '', label: 'Off' },
       {
         value: 'zipformer-ru-small',
-        label: 'zipformer-ru-small label — Russian · Fast · Fixture fit',
+        label: 'zipformer-ru-small label — Russian · Fast · Fixture fit (installed)',
       },
       {
         value: 't-one-ru',
         label:
-          't-one-ru label — Russian · Balanced · Accuracy-focused Russian preview · Live preview only',
+          't-one-ru label — Russian · Balanced · Accuracy-focused Russian preview · Live preview only (installed)',
       },
       {
         value: 'nemotron-3.5-multilingual',
@@ -135,20 +137,20 @@ describe('previewModelOptions', () => {
     ])
   })
 
-  it('marks an uninstalled model and leaves an installed one alone', () => {
-    // Selecting a model that is not downloaded yet is a silent dead end: it saves fine and then
-    // produces no preview and no error, because the profile's engines were already built.
-    // Labelling it is the only warning the picker gives, so both branches are asserted here
-    // rather than only the one the shared fixture happens to exercise.
+  it('marks both installed and uninstalled models explicitly', () => {
     const labels = previewModelOptions(CATALOG).map((o) => o.label)
 
     expect(labels).toContain(
       'zipformer-en-small label — English · Fast · Fixture fit (not downloaded)',
     )
-    expect(labels).toContain('zipformer-ru-small label — Russian · Fast · Fixture fit')
-    expect(labels).not.toContain(
-      'zipformer-ru-small label — Russian · Fast · Fixture fit (not downloaded)',
+    expect(labels).toContain(
+      'zipformer-ru-small label — Russian · Fast · Fixture fit (installed)',
     )
+  })
+
+  it('distinguishes damaged files from a model that was never downloaded', () => {
+    const damaged = { ...model('broken', 'whisper', false), status: 'damaged' as const }
+    expect(modelAvailabilityLabel(damaged)).toBe('damaged — re-download required')
   })
 
   it('offers "off" with an empty value even when no streaming model is catalogued', () => {
