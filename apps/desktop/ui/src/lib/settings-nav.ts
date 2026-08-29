@@ -1,3 +1,5 @@
+import { translate, type MessageKey, type Translator } from './i18n'
+
 export type SettingsSection =
   | 'profiles'
   | 'history'
@@ -8,11 +10,11 @@ export type SettingsSection =
 
 export interface SettingsNavItem {
   hash: SettingsSection
-  label: string
+  labelKey: MessageKey
 }
 
 export interface SettingsNavGroup {
-  label: string
+  labelKey: MessageKey
   items: SettingsNavItem[]
 }
 
@@ -20,23 +22,23 @@ export interface SettingsNavGroup {
  * navigation level and every destination is still one click away. */
 export const SETTINGS_NAV: SettingsNavGroup[] = [
   {
-    label: 'Dictation',
+    labelKey: 'nav.group.dictation',
     items: [
-      { hash: 'profiles', label: 'Profiles' },
-      { hash: 'vocabulary', label: 'Vocabulary' },
-      { hash: 'history', label: 'History' },
+      { hash: 'profiles', labelKey: 'nav.profiles' },
+      { hash: 'vocabulary', labelKey: 'nav.vocabulary' },
+      { hash: 'history', labelKey: 'nav.history' },
     ],
   },
   {
-    label: 'Resources',
+    labelKey: 'nav.group.resources',
     items: [
-      { hash: 'models', label: 'Models' },
-      { hash: 'connections', label: 'Connections' },
+      { hash: 'models', labelKey: 'nav.models' },
+      { hash: 'connections', labelKey: 'nav.connections' },
     ],
   },
   {
-    label: 'Application',
-    items: [{ hash: 'settings', label: 'Settings' }],
+    labelKey: 'nav.group.application',
+    items: [{ hash: 'settings', labelKey: 'nav.settings' }],
   },
 ]
 
@@ -66,10 +68,16 @@ export function resolveSettingsSection(raw: string, remembered = ''): SettingsSe
   return knownSection(remembered.trim().replace(/^#/, '').toLowerCase()) ?? 'settings'
 }
 
-export function settingsSectionLabel(section: SettingsSection): string {
-  return ITEMS.find((item) => item.hash === section)?.label ?? 'Settings'
+export function settingsSectionLabel(
+  section: SettingsSection,
+  translator: Translator = translate,
+): string {
+  return translator(ITEMS.find((item) => item.hash === section)?.labelKey ?? 'nav.settings')
 }
 
-export function settingsWindowTitle(section: SettingsSection): string {
-  return `${settingsSectionLabel(section)} — Utter`
+export function settingsWindowTitle(
+  section: SettingsSection,
+  translator: Translator = translate,
+): string {
+  return translator('app.windowTitle', { section: settingsSectionLabel(section, translator) })
 }

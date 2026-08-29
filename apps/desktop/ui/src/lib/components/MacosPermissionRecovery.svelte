@@ -1,5 +1,6 @@
 <script lang="ts">
   import * as api from '../api'
+  import { t } from '../i18n'
   import type { PermissionKind } from '../types'
 
   interface Props {
@@ -32,13 +33,15 @@
 </script>
 
 <div class="actions">
-  <button type="button" onclick={openSettings}>Open settings</button>
+  <button type="button" onclick={openSettings}>{$t('permission.openSettings')}</button>
 </div>
 <details>
-  <summary>Permission recovery</summary>
-  <p>Use this only when Utter is missing from System Settings or its saved permission is stale.</p>
+  <summary>{$t('permission.recovery')}</summary>
+  <p>{$t('permission.recoveryHint')}</p>
   <pre>{command}</pre>
-  <button type="button" onclick={copyCommand}>{copied ? 'Copied' : 'Copy reset command'}</button>
+  <button type="button" onclick={copyCommand}>
+    {copied ? $t('common.copied') : $t('permission.copyResetCommand')}
+  </button>
 </details>
 
 <style>

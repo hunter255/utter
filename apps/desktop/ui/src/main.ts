@@ -3,8 +3,11 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import './app.css'
 import App from './App.svelte'
 import Hud from './hud/Hud.svelte'
+import { initializeLocale } from './lib/i18n'
 
 const target = document.getElementById('app')!
+
+initializeLocale('system')
 
 // The HUD is a separate, minimal Tauri window (see `tauri.conf.json`'s
 // "hud" window and `src-tauri/src/sink.rs`, which shows/hides it as the

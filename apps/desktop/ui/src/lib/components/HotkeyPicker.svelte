@@ -11,6 +11,7 @@
     modifierTokensFor,
     tokenFor,
   } from '../hotkey'
+  import { t, type MessageKey } from '../i18n'
 
   interface Props {
     value?: string
@@ -23,7 +24,7 @@
 
   let capturing = $state(false)
   let preview = $state('')
-  let hint = $state('')
+  let hint = $state<MessageKey | null>(null)
   let button: HTMLButtonElement
 
   /** Keys physically down right now, for detecting "every key released". */
@@ -37,7 +38,7 @@
     if (disabled) return
     capturing = true
     preview = ''
-    hint = 'Press keys… (Esc to cancel)'
+    hint = 'hotkey.pressKeysHint'
     down = new Set()
     combo = new Set()
   }
@@ -48,7 +49,7 @@
       if (requireBaseKey && !hasBaseKey(candidate)) {
         capturing = false
         preview = ''
-        hint = 'Add a letter, number, function key, Space, `, or Insert'
+        hint = 'hotkey.addBaseKey'
         down = new Set()
         combo = new Set()
         return
@@ -57,7 +58,7 @@
     }
     capturing = false
     preview = ''
-    hint = ''
+    hint = null
     down = new Set()
     combo = new Set()
   }
@@ -81,14 +82,14 @@
 
     const comboHasBaseKey = [...combo].some((t) => !isModifierToken(t))
     if (!isModifierToken(token) && comboHasBaseKey && !combo.has(token)) {
-      hint = 'A hotkey may only have one base key'
+      hint = 'hotkey.oneBaseKey'
       return
     }
 
     down.add(token)
     combo.add(token)
     preview = formatCombo(combo)
-    hint = 'Release all keys to confirm'
+    hint = 'hotkey.releaseToConfirm'
   }
 
   function onKeyup(event: KeyboardEvent) {
@@ -145,13 +146,13 @@
     onblur={onBlur}
   >
     {#if capturing}
-      {preview || 'Press keys…'}
+      {preview || $t('hotkey.pressKeys')}
     {:else}
-      {value || 'Click to set…'}
+      {value || $t('hotkey.clickToSet')}
     {/if}
   </button>
   {#if hint}
-    <span class="hint">{hint}</span>
+    <span class="hint">{$t(hint)}</span>
   {/if}
 </div>
 

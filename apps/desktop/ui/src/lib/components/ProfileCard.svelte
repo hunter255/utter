@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Snippet } from 'svelte'
+  import { t } from '../i18n'
 
   interface Props {
     title: string
@@ -25,7 +26,7 @@
       <span class="summary">{summary}</span>
     </span>
     <span class:ready class:needs-setup={!ready} class="readiness">
-      {ready ? 'Ready' : 'Needs setup'}
+      {ready ? $t('common.ready') : $t('common.needsSetup')}
     </span>
     <span class="chevron" aria-hidden="true">⌄</span>
   </button>
