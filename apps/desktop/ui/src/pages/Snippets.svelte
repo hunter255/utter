@@ -29,7 +29,7 @@
 </script>
 
 <Section
-  title="Voice snippets"
+  title="Voice commands"
   description={'Say a trigger phrase verbatim and it is replaced by its stored body instead of being transcribed.'}
 >
   {#if settings.snippets.length > 0}

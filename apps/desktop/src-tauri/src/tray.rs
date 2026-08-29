@@ -1,5 +1,5 @@
-//! The one system tray/menu-bar status item: toggle dictation, flip
-//! refinement on/off, open settings, and quit cleanly. Its compact title also
+//! The one system tray/menu-bar status item: toggle dictation, temporarily
+//! pause refinement, open settings, and quit cleanly. Its compact title also
 //! mirrors the dictation phase so a hidden HUD does not make recording state
 //! invisible: `●` while listening, `…` while the transcript is processed,
 //! and no suffix while idle.
@@ -20,8 +20,13 @@ const TRAY_ID: &str = "utter-main";
 
 const MENU_TOGGLE: &str = "toggle-dictation";
 const MENU_REFINE: &str = "toggle-refinement";
+const MENU_REFINE_LABEL: &str = "Pause transcript refinement";
 const MENU_SETTINGS: &str = "open-settings";
 const MENU_QUIT: &str = "quit";
+
+fn refinement_is_paused(enabled: bool) -> bool {
+    !enabled
+}
 
 /// The three appearances the five runtime phases collapse into. The
 /// difference is deliberately shape/text as well as tooltip, not colour:
@@ -75,22 +80,22 @@ pub(crate) struct TrayIndicator {
 
 /// Builds the tray icon and its menu, wiring every item to its handler.
 pub fn build(app: &AppHandle) -> tauri::Result<()> {
-    let refine_enabled = {
+    let refinement_paused = {
         let state = app.state::<AppState>();
         state
             .settings
             .read()
-            .map(|s| s.refine.enabled)
-            .unwrap_or(false)
+            .map(|s| refinement_is_paused(s.refine.enabled))
+            .unwrap_or(true)
     };
 
     let toggle = MenuItem::with_id(app, MENU_TOGGLE, "Toggle dictation", true, None::<&str>)?;
     let refine = CheckMenuItem::with_id(
         app,
         MENU_REFINE,
-        "Refinement",
+        MENU_REFINE_LABEL,
         true,
-        refine_enabled,
+        refinement_paused,
         None::<&str>,
     )?;
     let settings_item = MenuItem::with_id(app, MENU_SETTINGS, "Open settings", true, None::<&str>)?;
@@ -173,9 +178,8 @@ fn toggle_dictation(app: &AppHandle) {
 }
 
 /// Flips `settings.refine.enabled`, persists it through the same save path
-/// `save_settings` uses, and syncs the checkbox's visual state to the
-/// authoritative (just-persisted) value rather than trusting the platform to
-/// have already toggled it itself.
+/// `save_settings` uses, and presents the inverse as a temporary "paused"
+/// checkbox. Individual profile policies remain untouched.
 fn toggle_refinement(app: &AppHandle, refine_item: &CheckMenuItem<tauri::Wry>) {
     let state = app.state::<AppState>();
 
@@ -187,14 +191,14 @@ fn toggle_refinement(app: &AppHandle, refine_item: &CheckMenuItem<tauri::Wry>) {
         guard.clone()
     };
     settings.refine.enabled = !settings.refine.enabled;
-    let enabled = settings.refine.enabled;
+    let paused = refinement_is_paused(settings.refine.enabled);
 
     if let Err(e) = crate::commands::persist_and_apply(app, &state, settings) {
         tracing::warn!("failed to toggle refinement: {e}");
         return;
     }
 
-    if let Err(e) = refine_item.set_checked(enabled) {
+    if let Err(e) = refine_item.set_checked(paused) {
         tracing::warn!("failed to update refinement menu checkbox: {e}");
     }
 }
@@ -254,5 +258,12 @@ mod tests {
         ] {
             assert!(activity.tooltip().starts_with("Utter — "));
         }
+    }
+
+    #[test]
+    fn refinement_menu_describes_its_checked_state_as_a_pause() {
+        assert_eq!(MENU_REFINE_LABEL, "Pause transcript refinement");
+        assert!(refinement_is_paused(false));
+        assert!(!refinement_is_paused(true));
     }
 }

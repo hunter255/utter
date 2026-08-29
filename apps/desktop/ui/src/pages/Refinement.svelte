@@ -47,14 +47,36 @@
   let refineApiKey = $state('')
   let refineKeyJustSaved = $state(false)
   let refineKeyError = $state('')
+  let sttConfigured = $state(false)
+  let sttApiKey = $state('')
+  let sttKeyJustSaved = $state(false)
+  let sttKeyError = $state('')
 
   onMount(async () => {
-    try {
-      refineConfigured = await api.hasApiKey('refine')
-    } catch {
-      refineConfigured = false
-    }
+    const [refineKeyPresent, sttKeyPresent] = await Promise.all([
+      api.hasApiKey('refine').catch(() => false),
+      api.hasApiKey('stt').catch(() => false),
+    ])
+    refineConfigured = refineKeyPresent
+    sttConfigured = sttKeyPresent
   })
+
+  async function saveSttKey() {
+    if (!sttApiKey.trim()) return
+    sttKeyError = ''
+    try {
+      await api.setApiKey('stt', sttApiKey)
+    } catch (err) {
+      sttKeyError = `Failed to save API key: ${String(err)}`
+      return
+    }
+    sttApiKey = ''
+    sttConfigured = true
+    sttKeyJustSaved = true
+    setTimeout(() => {
+      sttKeyJustSaved = false
+    }, 2000)
+  }
 
   async function saveRefineKey() {
     if (!refineApiKey.trim()) return
@@ -104,20 +126,52 @@
   }
 </script>
 
+<header class="page-heading">
+  <h1>Connections</h1>
+  <p>Credentials and endpoints used by cloud transcription and optional transcript refinement.</p>
+</header>
+
 <Section
-  title="Refinement"
-  description="The LLM connection dictation optionally sends transcripts through. Each profile decides for itself whether it uses this, and in what tone, on the Profiles page."
+  title="Cloud speech-to-text"
+  description="The shared credential for OpenAI-compatible transcription. Choose the endpoint and model inside each language profile."
+>
+  <Field label="API key" for="cloud-stt-key">
+    <div class="key-row">
+      <TextInput
+        id="cloud-stt-key"
+        type="password"
+        placeholder="sk-…"
+        bind:value={() => sttApiKey, (value) => (sttApiKey = value)}
+      />
+      <button type="button" onclick={saveSttKey} disabled={!sttApiKey.trim()}>Save</button>
+      {#if sttKeyJustSaved}
+        <span class="badge badge-installed">Saved</span>
+      {:else if sttConfigured}
+        <span class="badge badge-installed">Configured</span>
+      {:else}
+        <span class="badge badge-missing">Not set</span>
+      {/if}
+    </div>
+    {#if sttKeyError}
+      <p class="error">{sttKeyError}</p>
+    {/if}
+  </Field>
+</Section>
+
+<Section
+  title="Transcript refinement"
+  description="An OpenAI-compatible LLM connection. Each profile chooses whether to use it, its tone, and its instructions."
 >
   <Field
-    label="Enabled"
-    for="refine-enabled"
-    hint="Master switch: no profile refines while this is off, regardless of its own setting."
+    label="Pause all refinement"
+    for="refine-paused"
+    hint="Temporary global pause. Individual profile choices are preserved and resume when this is switched off."
   >
     <Toggle
-      id="refine-enabled"
+      id="refine-paused"
       bind:checked={
-        () => settings.refine.enabled,
-        (v) => settingsStore.patch({ refine: { enabled: v } })
+        () => !settings.refine.enabled,
+        (paused) => settingsStore.patch({ refine: { enabled: !paused } })
       }
     />
   </Field>
@@ -183,7 +237,10 @@
   </Field>
 </Section>
 
-<Section title="Test" description="Send a sample transcript through the current refinement configuration.">
+<Section
+  title="Test refinement connection"
+  description="Send a sample transcript through the current LLM configuration."
+>
   <Field label="Sample text" for="test-sample">
     <textarea id="test-sample" bind:value={testSample} rows="3"></textarea>
   </Field>
@@ -201,6 +258,22 @@
 </Section>
 
 <style>
+  .page-heading {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .page-heading h1 {
+    font-size: 20px;
+    font-weight: 700;
+  }
+
+  .page-heading p {
+    color: var(--text-muted);
+    font-size: 13px;
+  }
+
   .key-row {
     display: flex;
     align-items: center;
