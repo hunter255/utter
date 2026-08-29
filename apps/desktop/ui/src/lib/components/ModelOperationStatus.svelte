@@ -1,5 +1,6 @@
 <script lang="ts">
   import { modelStore } from '../model-store'
+  import { t } from '../i18n'
 
   let active = $derived(
     $modelStore.operation ??
@@ -24,17 +25,17 @@
   )
   let status = $derived(
     active?.phase === 'cancelling'
-      ? 'Cancelling…'
+      ? $t('common.cancelling')
       : active?.kind === 'remove'
-        ? 'Removing…'
+        ? $t('model.removing')
         : percent === null
-          ? 'Preparing download…'
-          : `Downloading ${percent}%`,
+          ? $t('model.preparingDownload')
+          : $t('model.downloadingPercent', { percent }),
   )
 </script>
 
 {#if active}
-  <aside class="model-operation" aria-live="polite" aria-label="Model operation">
+  <aside class="model-operation" aria-live="polite" aria-label={$t('model.operation')}>
     <div class="copy">
       <strong>{modelLabel}</strong>
       <span>{status}</span>
@@ -44,7 +45,7 @@
         type="button"
         onclick={() => modelStore.cancel($modelStore.operation!.id)}
         disabled={active.phase === 'cancelling'}
-      >{active.phase === 'cancelling' ? 'Cancelling…' : 'Cancel'}</button>
+      >{active.phase === 'cancelling' ? $t('common.cancelling') : $t('common.cancel')}</button>
     {/if}
     {#if active.kind === 'download'}
       <div

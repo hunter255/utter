@@ -5,38 +5,42 @@
 
   import { HUD_STYLE } from './layout'
   import { INITIAL_HUD_STATE, inputSignal, reduceHudState } from './state'
+  import { t, type MessageKey } from '../lib/i18n'
+  import type { InputSignal } from './state'
   import type { DictationPhase, DictationStatePayload } from '../lib/types'
 
   const BAR_COUNT = 12
   const barIndices = Array.from({ length: BAR_COUNT }, (_, i) => i)
 
-  const STATE_LABEL: Record<DictationPhase, string> = {
-    idle: 'Idle',
-    recording: 'Listening',
-    transcribing: 'Transcribing',
-    refining: 'Refining',
-    injecting: 'Injecting',
+  const STATE_LABEL: Record<DictationPhase, MessageKey> = {
+    idle: 'hud.state.idle',
+    recording: 'hud.state.recording',
+    transcribing: 'hud.state.transcribing',
+    refining: 'hud.state.refining',
+    injecting: 'hud.state.injecting',
   }
 
-  const SIGNAL_LABEL = {
-    none: 'No signal',
-    quiet: 'Quiet signal',
-    voice: 'Voice detected',
-  } as const
+  const SIGNAL_LABEL: Record<InputSignal, MessageKey> = {
+    none: 'hud.signal.none',
+    quiet: 'hud.signal.quiet',
+    voice: 'hud.signal.voice',
+  }
 
-  const EMPTY_PREVIEW: Record<DictationPhase, string> = {
-    idle: '',
-    recording: 'Listening for speech…',
-    transcribing: 'Preparing the final transcript…',
-    refining: 'Refining the transcript…',
-    injecting: 'Delivering text…',
+  const EMPTY_PREVIEW: Record<DictationPhase, MessageKey | null> = {
+    idle: null,
+    recording: 'hud.preview.recording',
+    transcribing: 'hud.preview.transcribing',
+    refining: 'hud.preview.refining',
+    injecting: 'hud.preview.injecting',
   }
 
   let hud = $state({ ...INITIAL_HUD_STATE })
   let phase = $derived(hud.phase)
   let partial = $derived(hud.partial)
   let signal = $derived(inputSignal(hud.meter))
-  let previewText = $derived(partial ?? EMPTY_PREVIEW[phase])
+  let previewText = $derived(
+    partial ?? (EMPTY_PREVIEW[phase] ? $t(EMPTY_PREVIEW[phase]) : ''),
+  )
 
   // `hud.meter` is already converted from linear RMS to a perceptual dBFS
   // scale and smoothed in `state.ts`. A non-zero quiet signal always lights
@@ -85,19 +89,19 @@
   <div class="row">
     <span class="status">
       <span class="dot"></span>
-      <span class="label">{STATE_LABEL[phase]}</span>
+      <span class="label">{$t(STATE_LABEL[phase])}</span>
     </span>
     {#if phase === 'recording'}
       <span class="signal" data-signal={signal}>
         <span class="signal-dot"></span>
-        {SIGNAL_LABEL[signal]}
+        {$t(SIGNAL_LABEL[signal])}
       </span>
     {/if}
   </div>
   <div
     class="bars"
     role="meter"
-    aria-label="Microphone input level"
+    aria-label={$t('hud.microphoneLevel')}
     aria-valuemin="0"
     aria-valuemax={BAR_COUNT}
     aria-valuenow={activeBars}

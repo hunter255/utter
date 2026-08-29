@@ -8,6 +8,7 @@
   import Select from '../lib/components/Select.svelte'
   import * as api from '../lib/api'
   import { hasBaseKey, parseChordTokens } from '../lib/hotkey'
+  import { t, type MessageKey } from '../lib/i18n'
   import { modelStore } from '../lib/model-store'
   import {
     modelCapabilityLabel,
@@ -39,7 +40,20 @@
     return parseChordTokens(hotkey) !== null && (!requiresBaseKey || hasBaseKey(hotkey))
   })
 
-  const STEPS = ['Welcome', 'Microphone', 'Model', 'Hotkey', 'Permissions', 'Done'] as const
+  const STEPS: MessageKey[] = [
+    'onboarding.step.welcome',
+    'onboarding.step.microphone',
+    'onboarding.step.model',
+    'onboarding.step.hotkey',
+    'onboarding.step.permissions',
+    'onboarding.step.done',
+  ]
+  const PERMISSION_STATUS_KEYS: Record<PermissionStatus, MessageKey> = {
+    granted: 'permission.status.granted',
+    denied: 'permission.status.denied',
+    not_determined: 'permission.status.notDetermined',
+    unavailable: 'permission.status.unavailable',
+  }
   let step = $state(0)
 
   function next() {
@@ -89,7 +103,10 @@
   let modelPickerOptions = $derived([
     {
       value: '',
-      label: models.length === 0 ? 'Loading models…' : 'Choose a local model',
+      label:
+        models.length === 0
+          ? $t('onboarding.loadingModels')
+          : $t('onboarding.chooseLocalModel'),
     },
     ...transcriptionModelOptions(models),
   ])
@@ -164,6 +181,10 @@
     return '•'
   }
 
+  function permissionStatusLabel(status: PermissionStatus): string {
+    return $t(PERMISSION_STATUS_KEYS[status])
+  }
+
   async function copyFixCommand() {
     if (!permissions || permissions.platform !== 'linux') return
     try {
@@ -204,52 +225,57 @@
   <div class="card">
     <div class="steps">
       {#each STEPS as label, i (label)}
-        <span class="step-dot" class:active={i === step} class:done={i < step}>{i + 1}</span>
+        <span
+          class="step-dot"
+          class:active={i === step}
+          class:done={i < step}
+          aria-label={$t(label)}
+        >{i + 1}</span>
       {/each}
     </div>
 
     {#if step === 0}
-      <h1>Welcome to Utter</h1>
-      <p>A quick, skippable setup: microphone, a speech model, your hotkey, and permissions.</p>
+      <h1>{$t('onboarding.welcomeTitle')}</h1>
+      <p>{$t('onboarding.welcomeBody')}</p>
     {:else if step === 1}
-      <h1>Microphone</h1>
+      <h1>{$t('onboarding.microphoneTitle')}</h1>
       {#if permissions?.platform === 'macos' && permissions.microphone !== 'granted'}
-        <p class="muted">Utter needs microphone access to record speech for transcription.</p>
+        <p class="muted">{$t('onboarding.microphoneNeedsAccess')}</p>
         {#if permissions.microphone === 'not_determined'}
           <button
             type="button"
             onclick={() => requestPermission('microphone')}
             disabled={permissionBusy !== null}
-          >{permissionBusy === 'microphone' ? 'Requesting…' : 'Allow microphone'}</button>
+          >{permissionBusy === 'microphone'
+              ? $t('common.requesting')
+              : $t('onboarding.allowMicrophone')}</button>
         {:else if permissions.microphone === 'denied'}
-          <p class="warn">
-            Microphone access is off. Enable Utter in System Settings → Privacy & Security →
-            Microphone, then return here.
-          </p>
+          <p class="warn">{$t('onboarding.microphoneOff')}</p>
           <MacosPermissionRecovery
             kind="microphone"
             command={permissions.microphone_reset_command}
             onError={(message) => (permissionsError = message)}
           />
-          <p class="muted">
-            If Utter is missing or the status is stale, copy the command, quit Utter, run it in
-            Terminal, then reopen the app and allow access again.
-          </p>
+          <p class="muted">{$t('onboarding.microphoneRecoveryHint')}</p>
         {:else}
-          <p class="warn">Microphone permission is unavailable on this Mac.</p>
+          <p class="warn">{$t('onboarding.microphoneUnavailable')}</p>
         {/if}
       {:else}
-        <p class="muted">
-          This confirms your system reports an input device; live recording is tested when you
-          dictate.
-        </p>
+        <p class="muted">{$t('onboarding.microphoneCheckHint')}</p>
         {#if devicesError}
           <p class="error">{devicesError}</p>
         {:else if devicesChecked}
           {#if devices.length === 0}
-            <p class="warn">No input devices were found. Check your microphone connection.</p>
+            <p class="warn">{$t('onboarding.noInputDevices')}</p>
           {:else}
-            <p>Found {devices.length} input device{devices.length === 1 ? '' : 's'}:</p>
+            <p>
+              {$t(
+                devices.length === 1
+                  ? 'onboarding.foundInputDevice'
+                  : 'onboarding.foundInputDevices',
+                { count: devices.length },
+              )}
+            </p>
             <ul>
               {#each devices as device (device)}
                 <li>{device}</li>
@@ -257,17 +283,14 @@
             </ul>
           {/if}
         {:else}
-          <p class="muted">Checking…</p>
+          <p class="muted">{$t('common.checking')}</p>
         {/if}
       {/if}
     {:else if step === 2}
-      <h1>Speech model</h1>
-      <p class="muted">
-        Choose the language and local model for your first profile. All final-transcript models
-        in the catalog are available here; live-preview-only models stay separate.
-      </p>
+      <h1>{$t('onboarding.modelTitle')}</h1>
+      <p class="muted">{$t('onboarding.modelBody')}</p>
       <div class="picker-field">
-        <label for="onboarding-language">Language</label>
+        <label for="onboarding-language">{$t('onboarding.language')}</label>
         <Select
           id="onboarding-language"
           options={languagePickerOptions}
@@ -275,7 +298,7 @@
         />
       </div>
       <div class="picker-field">
-        <label for="onboarding-model">Model</label>
+        <label for="onboarding-model">{$t('onboarding.model')}</label>
         <Select
           id="onboarding-model"
           options={modelPickerOptions}
@@ -293,10 +316,7 @@
         <p class="warn">{languageWarning}</p>
       {/if}
       {#if profileEngine === 'cloud' && !selectedModel}
-        <p class="muted">
-          Your default profile dictates through a cloud speech-to-text endpoint. Configure its
-          API key under Settings &gt; Engines after finishing setup, or choose a local model above.
-        </p>
+        <p class="muted">{$t('onboarding.cloudProfile')}</p>
       {:else if selectedModel}
         <ul class="model-list">
           <li>
@@ -316,14 +336,14 @@
           </li>
         </ul>
         {#if selectedModelInstalled}
-          <p class="ok">This model is installed — you're ready to dictate.</p>
+          <p class="ok">{$t('onboarding.modelInstalled')}</p>
         {/if}
       {:else if models.length > 0}
-        <p class="warn">Choose a model before continuing if you want to dictate locally.</p>
+        <p class="warn">{$t('onboarding.chooseModelForLocal')}</p>
       {/if}
     {:else if step === 3}
-      <h1>Hotkey</h1>
-      <p class="muted">Pick the key combination that starts/stops dictation.</p>
+      <h1>{$t('onboarding.hotkeyTitle')}</h1>
+      <p class="muted">{$t('onboarding.hotkeyBody')}</p>
       <HotkeyPicker
         requireBaseKey={requiresBaseKey}
         bind:value={
@@ -337,78 +357,81 @@
       {#if !hotkeyValid}
         <p class="warn">
           {requiresBaseKey
-            ? 'macOS needs a base key; modifiers are optional. Try `, Insert, F5, or ctrl+alt+space.'
-            : 'Choose a hotkey before continuing.'}
+            ? $t('onboarding.macosNeedsBaseKey')
+            : $t('onboarding.chooseHotkey')}
         </p>
       {/if}
     {:else if step === 4}
-      <h1>Permissions</h1>
+      <h1>{$t('onboarding.permissionsTitle')}</h1>
       {#if permissionsError}
         <p class="error">{permissionsError}</p>
       {:else if permissions}
         {#if permissions.platform === 'linux'}
-          <p class="muted">Linux hotkeys and text injection need two OS-level permissions.</p>
+          <p class="muted">{$t('onboarding.linuxPermissionsIntro')}</p>
           <ul class="perm-list">
             <li>
               <span class="perm-status" class:ok={permissions.input_group}>
                 {permissions.input_group ? '✓' : '✗'}
               </span>
-              Input device group membership
+              {$t('onboarding.inputGroup')}
             </li>
             <li>
               <span class="perm-status" class:ok={permissions.uinput_writable}>
                 {permissions.uinput_writable ? '✓' : '✗'}
               </span>
-              /dev/uinput writable
+              {$t('onboarding.uinputWritable')}
             </li>
           </ul>
           {#if !permissions.input_group || !permissions.uinput_writable}
             <pre class="fix-command">{permissions.fix_command}</pre>
-            <button type="button" onclick={copyFixCommand}>{fixCopied ? 'Copied' : 'Copy fix command'}</button>
+            <button type="button" onclick={copyFixCommand}>
+              {fixCopied ? $t('common.copied') : $t('onboarding.copyFixCommand')}
+            </button>
           {:else}
-            <p class="ok">All required permissions are already granted.</p>
+            <p class="ok">{$t('onboarding.allPermissionsAlreadyGranted')}</p>
           {/if}
         {:else if permissions.platform === 'macos'}
-          <p class="muted">
-            These permissions are requested only when you press an Allow button. You can
-            continue with reduced functionality if either remains off.
-          </p>
+          <p class="muted">{$t('onboarding.permissionRequestHint')}</p>
           <ul class="perm-list">
             <li>
               <span class="perm-status" class:ok={permissions.microphone === 'granted'}>
                 {permissionMark(permissions.microphone)}
               </span>
-              Microphone — {permissions.microphone.replace('_', ' ')}
+              {$t('onboarding.microphonePermission', {
+                status: permissionStatusLabel(permissions.microphone),
+              })}
               {#if permissions.microphone === 'not_determined'}
                 <button
                   type="button"
                   onclick={() => requestPermission('microphone')}
                   disabled={permissionBusy !== null}
-                >{permissionBusy === 'microphone' ? 'Requesting…' : 'Allow'}</button>
+                >{permissionBusy === 'microphone'
+                    ? $t('common.requesting')
+                    : $t('common.allow')}</button>
               {/if}
             </li>
             <li>
               <span class="perm-status" class:ok={permissions.text_injection === 'granted'}>
                 {permissionMark(permissions.text_injection)}
               </span>
-              Paste and caret-relative HUD — {permissions.text_injection.replace('_', ' ')}
+              {$t('onboarding.pastePermission', {
+                status: permissionStatusLabel(permissions.text_injection),
+              })}
               {#if permissions.text_injection === 'not_determined'}
                 <button
                   type="button"
                   onclick={() => requestPermission('text_injection')}
                   disabled={permissionBusy !== null}
-                >{permissionBusy === 'text_injection' ? 'Requesting…' : 'Allow'}</button>
+                >{permissionBusy === 'text_injection'
+                    ? $t('common.requesting')
+                    : $t('common.allow')}</button>
               {/if}
             </li>
           </ul>
           {#if permissions.microphone === 'denied' || permissions.text_injection === 'denied'}
-            <p class="warn">
-              Enable the denied access in System Settings → Privacy & Security, then return to
-              Utter and check again. Dictation needs Microphone; automatic paste and precise
-              HUD position need Accessibility.
-            </p>
+            <p class="warn">{$t('onboarding.deniedPermissionHint')}</p>
             {#if permissions.microphone === 'denied'}
-              <strong class="recovery-label">Microphone recovery</strong>
+              <strong class="recovery-label">{$t('onboarding.microphoneRecovery')}</strong>
               <MacosPermissionRecovery
                 kind="microphone"
                 command={permissions.microphone_reset_command}
@@ -416,52 +439,50 @@
               />
             {/if}
             {#if permissions.text_injection === 'denied'}
-              <strong class="recovery-label">Accessibility recovery</strong>
+              <strong class="recovery-label">{$t('onboarding.accessibilityRecovery')}</strong>
               <MacosPermissionRecovery
                 kind="text_injection"
                 command={permissions.text_injection_reset_command}
                 onError={(message) => (permissionsError = message)}
               />
             {/if}
-            <p class="muted">
-              Use reset only if the System Settings entry is missing or stale: copy the command,
-              quit Utter, run it in Terminal, then reopen Utter and allow access again.
-            </p>
-            <button type="button" onclick={checkPermissions}>Check again</button>
+            <p class="muted">{$t('onboarding.resetPermissionHint')}</p>
+            <button type="button" onclick={checkPermissions}>{$t('common.checkAgain')}</button>
           {:else if permissions.microphone === 'granted' && permissions.text_injection === 'granted'}
-            <p class="ok">All required permissions are granted.</p>
+            <p class="ok">{$t('onboarding.allPermissionsGranted')}</p>
           {/if}
         {:else}
           <p class="muted">
-            Permission setup for {permissions.os} is not available in this build yet. You can
-            continue and configure platform access later.
+            {$t('onboarding.permissionsUnsupported', { os: permissions.os })}
           </p>
         {/if}
       {:else}
-        <p class="muted">Checking…</p>
+        <p class="muted">{$t('common.checking')}</p>
       {/if}
     {:else if step === 5}
-      <h1>You're all set</h1>
-      <p>You can revisit any of this later from the settings sidebar.</p>
+      <h1>{$t('onboarding.doneTitle')}</h1>
+      <p>{$t('onboarding.doneBody')}</p>
     {/if}
 
     <div class="actions">
       {#if step > 0}
-        <button type="button" onclick={back} disabled={operationBusy}>Back</button>
+        <button type="button" onclick={back} disabled={operationBusy}>{$t('common.back')}</button>
       {/if}
       <div class="spacer"></div>
       {#if step < STEPS.length - 1}
-        <button type="button" class="ghost" onclick={onDone} disabled={operationBusy}>Skip setup</button>
+        <button type="button" class="ghost" onclick={onDone} disabled={operationBusy}>
+          {$t('common.skipSetup')}
+        </button>
         <button
           type="button"
           class="primary"
           onclick={next}
           disabled={operationBusy || (step === 3 && !hotkeyValid)}
         >
-          Continue
+          {$t('common.continue')}
         </button>
       {:else}
-        <button type="button" class="primary" onclick={onDone}>Finish</button>
+        <button type="button" class="primary" onclick={onDone}>{$t('common.finish')}</button>
       {/if}
     </div>
   </div>

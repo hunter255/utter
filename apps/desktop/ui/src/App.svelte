@@ -7,6 +7,7 @@
   import * as api from './lib/api'
   import { modelStore } from './lib/model-store'
   import { noticeStore } from './lib/notices'
+  import { t } from './lib/i18n'
   import {
     SETTINGS_NAV,
     resolveSettingsSection,
@@ -97,7 +98,7 @@
       capabilities = loadedCapabilities
       showOnboarding = !localStorage.getItem(ONBOARDED_KEY) && isDefaultSettings(loaded)
     } catch (err) {
-      loadError = `Failed to load settings: ${String(err)}`
+      loadError = String(err)
     } finally {
       loading = false
     }
@@ -122,7 +123,7 @@
   })
 
   $effect(() => {
-    const title = settingsWindowTitle(hash)
+    const title = settingsWindowTitle(hash, $t)
     localStorage.setItem(LAST_SECTION_KEY, hash)
     document.title = title
     void api.setWindowTitle(title).catch(() => {})
@@ -130,18 +131,18 @@
 </script>
 
 {#if loading}
-  <div class="status">Loading settings…</div>
+  <div class="status">{$t('app.loadingSettings')}</div>
 {:else if loadError}
-  <div class="status error">{loadError}</div>
+  <div class="status error">{$t('app.loadSettingsFailed', { error: loadError })}</div>
 {:else if showOnboarding && capabilities}
   <Onboarding onDone={finishOnboarding} {capabilities} />
 {:else if $settingsStore && capabilities}
   <div class="shell">
-    <nav aria-label="Settings sections">
+    <nav aria-label={$t('app.settingsSections')}>
       <div class="brand">Utter</div>
-      {#each SETTINGS_NAV as group (group.label)}
-        <section class="nav-group" aria-label={group.label}>
-          <div class="nav-group-label">{group.label}</div>
+      {#each SETTINGS_NAV as group (group.labelKey)}
+        <section class="nav-group" aria-label={$t(group.labelKey)}>
+          <div class="nav-group-label">{$t(group.labelKey)}</div>
           <ul>
             {#each group.items as item (item.hash)}
               <li>
@@ -150,7 +151,7 @@
                   aria-current={hash === item.hash ? 'page' : undefined}
                   class:active={hash === item.hash}
                 >
-                  {item.label}
+                  {$t(item.labelKey)}
                 </a>
               </li>
             {/each}

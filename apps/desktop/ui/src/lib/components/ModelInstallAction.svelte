@@ -1,5 +1,6 @@
 <script lang="ts">
   import { modelStore } from '../model-store'
+  import { t } from '../i18n'
   import type { ModelInfo } from '../types'
 
   interface Props {
@@ -21,8 +22,8 @@
   )
   let downloadLabel = $derived(
     model?.status === 'damaged'
-      ? `Re-download ${model.size_mb} MB`
-      : `Download ${model?.size_mb ?? 0} MB and use`,
+      ? $t('model.redownloadSize', { size: model.size_mb })
+      : $t('model.downloadSizeAndUse', { size: model?.size_mb ?? 0 }),
   )
 </script>
 
@@ -30,14 +31,14 @@
   <div class="install-action">
     <div class="status-row">
       {#if model.status === 'ready'}
-        <span class="badge ready">Ready to use</span>
+        <span class="badge ready">{$t('model.readyToUse')}</span>
       {:else if downloading}
         <span class="state">
           {operation?.phase === 'cancelling'
-            ? 'Cancelling…'
+            ? $t('common.cancelling')
             : percent === null
-              ? 'Preparing download…'
-              : `Downloading ${percent}%`}
+              ? $t('model.preparingDownload')
+              : $t('model.downloadingPercent', { percent })}
         </span>
         {#if operation?.kind === 'download'}
           <button
@@ -45,11 +46,13 @@
             class="cancel"
             onclick={() => modelStore.cancel(model.id)}
             disabled={operation.phase === 'cancelling'}
-          >{operation.phase === 'cancelling' ? 'Cancelling…' : 'Cancel'}</button>
+          >{operation.phase === 'cancelling' ? $t('common.cancelling') : $t('common.cancel')}</button>
         {/if}
       {:else}
         <span class:damaged={model.status === 'damaged'} class="state">
-          {model.status === 'damaged' ? 'Model files are damaged' : 'Selected, not installed'}
+          {model.status === 'damaged'
+            ? $t('model.filesDamaged')
+            : $t('model.selectedNotInstalled')}
         </span>
         <button
           type="button"
@@ -64,7 +67,7 @@
         class="progress-track"
         class:indeterminate={percent === null}
         role="progressbar"
-        aria-label={`Downloading ${model.label}`}
+        aria-label={$t('model.downloadAria', { model: model.label })}
         aria-valuemin="0"
         aria-valuemax="100"
         aria-valuenow={percent ?? undefined}

@@ -9,10 +9,10 @@ import {
 describe('settings navigation', () => {
   it('keeps every grouped destination one flat unique route', () => {
     const routes = SETTINGS_NAV.flatMap((group) => group.items.map((item) => item.hash))
-    expect(SETTINGS_NAV.map((group) => group.label)).toEqual([
-      'Dictation',
-      'Resources',
-      'Application',
+    expect(SETTINGS_NAV.map((group) => group.labelKey)).toEqual([
+      'nav.group.dictation',
+      'nav.group.resources',
+      'nav.group.application',
     ])
     expect(new Set(routes).size).toBe(routes.length)
   })

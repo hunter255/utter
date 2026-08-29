@@ -2,11 +2,12 @@
   // Renders whatever is currently in `noticeStore` (see `lib/notices.ts` for
   // why this window is the notice's second stop, not its first).
   import { noticeStore } from '../notices'
+  import { t, type MessageKey } from '../i18n'
 
-  const KIND_LABEL = {
-    info: 'Notice',
-    warning: 'Warning',
-    error: 'Error',
+  const KIND_LABEL: Record<'info' | 'warning' | 'error', MessageKey> = {
+    info: 'notice.info',
+    warning: 'notice.warning',
+    error: 'notice.error',
   } as const
 </script>
 
@@ -16,7 +17,7 @@
       <div class="notice" data-kind={notice.kind}>
         <div class="text">
           <div class="head">
-            <span class="kind">{KIND_LABEL[notice.kind]}</span>
+            <span class="kind">{$t(KIND_LABEL[notice.kind])}</span>
             {#if notice.count > 1}
               <span class="count">×{notice.count}</span>
             {/if}
@@ -26,7 +27,7 @@
         <button
           type="button"
           class="dismiss"
-          aria-label="Dismiss notice"
+          aria-label={$t('notice.dismiss')}
           onclick={() => noticeStore.dismiss(notice.id)}
         >
           ×
