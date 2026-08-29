@@ -1,24 +1,77 @@
-//! System tray icon and menu: toggle dictation, flip refinement on/off,
-//! open the settings window, and quit (shutting the dictation runtime down
-//! cleanly first).
-//!
-//! Tray icon state variants (a distinct "recording" icon) are not
-//! implemented: there is no second icon asset to swap in via `set_icon`, and
-//! tauri's tray tooltip — the other lightweight option — is documented as
-//! unsupported on Linux, this project's only target platform today. A
-//! single static icon is used for every dictation phase; the HUD window is
-//! the actual state indicator (see `sink.rs`, `ui/src/hud/Hud.svelte`).
+//! The one system tray/menu-bar status item: toggle dictation, flip
+//! refinement on/off, open settings, and quit cleanly. Its compact title also
+//! mirrors the dictation phase so a hidden HUD does not make recording state
+//! invisible: `●` while listening, `…` while the transcript is processed,
+//! and no suffix while idle.
+
+use std::sync::Mutex;
 
 use tauri::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager};
 
+use crate::events::DictationPhase;
 use crate::state::AppState;
+
+/// Stable id for the sole status item owned by this module. The declarative
+/// `app.trayIcon` entry must stay absent from `tauri.conf.json`; otherwise
+/// Tauri creates a second icon before [`build`] runs.
+const TRAY_ID: &str = "utter-main";
 
 const MENU_TOGGLE: &str = "toggle-dictation";
 const MENU_REFINE: &str = "toggle-refinement";
 const MENU_SETTINGS: &str = "open-settings";
 const MENU_QUIT: &str = "quit";
+
+/// The three appearances the five runtime phases collapse into. The
+/// difference is deliberately shape/text as well as tooltip, not colour:
+/// macOS owns status-item tint in light/dark mode and a colour-only signal
+/// would be inaccessible.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum TrayActivity {
+    #[default]
+    Idle,
+    Recording,
+    Processing,
+}
+
+impl TrayActivity {
+    fn for_phase(phase: DictationPhase) -> Self {
+        match phase {
+            DictationPhase::Idle => Self::Idle,
+            DictationPhase::Recording => Self::Recording,
+            DictationPhase::Transcribing | DictationPhase::Refining | DictationPhase::Injecting => {
+                Self::Processing
+            }
+        }
+    }
+
+    fn title(self) -> &'static str {
+        match self {
+            // `set_title(None)` does not clear the title on every tray-icon
+            // backend; an explicit empty string does.
+            Self::Idle => "",
+            Self::Recording => "●",
+            Self::Processing => "…",
+        }
+    }
+
+    fn tooltip(self) -> &'static str {
+        match self {
+            Self::Idle => "Utter — Ready",
+            Self::Recording => "Utter — Recording",
+            Self::Processing => "Utter — Processing speech",
+        }
+    }
+}
+
+/// App-managed state used to suppress redundant native status-item updates.
+/// Recording level events arrive many times per second; only a phase edge
+/// should call into AppKit.
+#[derive(Default)]
+pub(crate) struct TrayIndicator {
+    activity: Mutex<TrayActivity>,
+}
 
 /// Builds the tray icon and its menu, wiring every item to its handler.
 pub fn build(app: &AppHandle) -> tauri::Result<()> {
@@ -46,8 +99,9 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
     let menu = Menu::with_items(app, &[&toggle, &refine, &settings_item, &quit])?;
 
     let refine_for_handler = refine.clone();
-    let mut builder = TrayIconBuilder::new()
+    let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
+        .tooltip(TrayActivity::Idle.tooltip())
         .show_menu_on_left_click(true)
         .on_menu_event(move |app, event| handle_menu_event(app, event, &refine_for_handler));
 
@@ -59,6 +113,38 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
     builder.build(app)?;
 
     Ok(())
+}
+
+/// Reflects `phase` in the menu bar. Failures only degrade this accessory
+/// indicator; recording, HUD updates, and injection continue unchanged.
+pub(crate) fn set_phase(app: &AppHandle, phase: DictationPhase) {
+    let next = TrayActivity::for_phase(phase);
+    let indicator = app.state::<TrayIndicator>();
+    let mut current = indicator
+        .activity
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if *current == next {
+        return;
+    }
+
+    let Some(tray) = app.tray_by_id(TRAY_ID) else {
+        tracing::warn!("tray icon not found; cannot show dictation state");
+        return;
+    };
+
+    let mut updated = true;
+    if let Err(error) = tray.set_title(Some(next.title())) {
+        tracing::warn!("failed to update tray state title: {error}");
+        updated = false;
+    }
+    if let Err(error) = tray.set_tooltip(Some(next.tooltip())) {
+        tracing::warn!("failed to update tray state tooltip: {error}");
+        updated = false;
+    }
+    if updated {
+        *current = next;
+    }
 }
 
 fn handle_menu_event(app: &AppHandle, event: MenuEvent, refine_item: &CheckMenuItem<tauri::Wry>) {
@@ -131,4 +217,42 @@ fn quit(app: &AppHandle) {
     let state = app.state::<AppState>();
     crate::runtime_boot::shutdown(&state);
     app.exit(0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_phases_map_to_three_stable_menu_bar_states() {
+        assert_eq!(
+            TrayActivity::for_phase(DictationPhase::Idle),
+            TrayActivity::Idle
+        );
+        assert_eq!(
+            TrayActivity::for_phase(DictationPhase::Recording),
+            TrayActivity::Recording
+        );
+        for phase in [
+            DictationPhase::Transcribing,
+            DictationPhase::Refining,
+            DictationPhase::Injecting,
+        ] {
+            assert_eq!(TrayActivity::for_phase(phase), TrayActivity::Processing);
+        }
+    }
+
+    #[test]
+    fn every_state_has_a_textual_cue_and_idle_clears_the_suffix() {
+        assert_eq!(TrayActivity::Idle.title(), "");
+        assert_eq!(TrayActivity::Recording.title(), "●");
+        assert_eq!(TrayActivity::Processing.title(), "…");
+        for activity in [
+            TrayActivity::Idle,
+            TrayActivity::Recording,
+            TrayActivity::Processing,
+        ] {
+            assert!(activity.tooltip().starts_with("Utter — "));
+        }
+    }
 }

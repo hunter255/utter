@@ -103,6 +103,10 @@ fn init_tracing(setting: &str) -> Option<String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() -> Result<(), String> {
     let builder = tauri::Builder::default()
+        // The tray module owns the one status item created in `setup`. Keeping
+        // its last visual state here lets high-frequency recording level
+        // events collapse into one icon update per phase transition.
+        .manage(tray::TrayIndicator::default())
         .plugin(tauri_plugin_notification::init())
         // A stable name keeps the OS registration singular even if the
         // human-facing package name changes. The plugin's default macOS
@@ -280,6 +284,21 @@ mod tests {
         assert_eq!(
             config["bundle"]["resources"]["../../../LICENSE-APACHE"],
             "licenses/Apache-2.0.txt"
+        );
+    }
+
+    /// The menu-bearing status item is built in `tray::build`. A declarative
+    /// `app.trayIcon` entry makes Tauri create another status item before
+    /// `setup`, which is how one process ended up showing two identical menu
+    /// bar icons on macOS.
+    #[test]
+    fn the_tauri_config_does_not_create_a_second_tray_icon() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("valid Tauri config");
+
+        assert!(
+            config["app"].get("trayIcon").is_none(),
+            "tray::build is the sole owner of the app's status item"
         );
     }
 
