@@ -207,6 +207,7 @@ pub fn run() -> Result<(), String> {
             commands::save_settings,
             commands::list_devices,
             commands::list_models,
+            commands::model_operation_state,
             commands::download_model,
             commands::cancel_model_download,
             commands::remove_model,

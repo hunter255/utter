@@ -23,7 +23,7 @@ import type {
   HistoryEntry,
   ModelDownloadOutcome,
   ModelInfo,
-  ModelProgressPayload,
+  ModelOperationSnapshot,
   NoticePayload,
   PermissionReport,
   PermissionKind,
@@ -47,6 +47,10 @@ export function listDevices(): Promise<string[]> {
 
 export function listModels(): Promise<ModelInfo[]> {
   return invoke('list_models')
+}
+
+export function modelOperationState(): Promise<ModelOperationSnapshot> {
+  return invoke('model_operation_state')
 }
 
 export function downloadModel(id: string): Promise<ModelDownloadOutcome> {
@@ -133,10 +137,10 @@ export function takePendingNotices(): Promise<NoticePayload[]> {
   return invoke('take_pending_notices')
 }
 
-export function onModelProgress(
-  handler: (payload: ModelProgressPayload) => void,
+export function onModelOperation(
+  handler: (payload: ModelOperationSnapshot) => void,
 ): Promise<UnlistenFn> {
-  return listen<ModelProgressPayload>('model-progress', (event) => handler(event.payload))
+  return listen<ModelOperationSnapshot>('model-operation', (event) => handler(event.payload))
 }
 
 export function onUpdateProgress(

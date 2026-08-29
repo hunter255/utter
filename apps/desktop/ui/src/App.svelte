@@ -3,7 +3,9 @@
   import type { UnlistenFn } from '@tauri-apps/api/event'
 
   import Notices from './lib/components/Notices.svelte'
+  import ModelOperationStatus from './lib/components/ModelOperationStatus.svelte'
   import * as api from './lib/api'
+  import { modelStore } from './lib/model-store'
   import { noticeStore } from './lib/notices'
   import { settingsStore } from './lib/stores'
   import { applyTheme } from './lib/theme'
@@ -90,6 +92,7 @@
       const [loaded, loadedCapabilities] = await Promise.all([
         settingsStore.load(),
         api.platformCapabilities(),
+        modelStore.start(),
       ])
       capabilities = loadedCapabilities
       showOnboarding = !localStorage.getItem(ONBOARDED_KEY) && isDefaultSettings(loaded)
@@ -107,6 +110,7 @@
     window.removeEventListener('hashchange', onHashChange)
     window.removeEventListener('beforeunload', onBeforeUnload)
     unlistenNotices?.()
+    modelStore.stop()
     // A patch made right before this window closes (e.g. the user tweaked a
     // field and immediately hit the OS close button) must not be dropped
     // just because the 500ms debounce hadn't elapsed yet.
@@ -165,6 +169,10 @@
     </main>
   </div>
 {/if}
+
+<!-- Model operations outlive every route component, so their progress stays
+     visible while the user moves between settings sections or onboarding. -->
+<ModelOperationStatus />
 
 <!-- Outside the branches above: a notice has to be readable whichever of
      them is on screen, including the settings-load error. -->

@@ -1,114 +1,66 @@
 <script lang="ts">
-  import { onDestroy, onMount } from 'svelte'
+  import { onMount } from 'svelte'
 
   import Section from '../lib/components/Section.svelte'
   import Field from '../lib/components/Field.svelte'
   import TextInput from '../lib/components/TextInput.svelte'
   import * as api from '../lib/api'
+  import { modelStore } from '../lib/model-store'
   import { modelCapabilityLabel, previewModels } from '../lib/models'
-  import type { ModelInfo } from '../lib/types'
 
-  let models = $state<ModelInfo[]>([])
-  let modelsError = $state('')
-  let progress = $state<Record<string, { done: number; total: number }>>({})
-  let busy = $state<Record<string, boolean>>({})
-  let activeDownloadId = $state<string | null>(null)
-  let cancellingDownload = $state(false)
   let sttConfigured = $state(false)
   let sttApiKey = $state('')
   let sttKeyJustSaved = $state(false)
   let sttKeyError = $state('')
 
+  let models = $derived($modelStore.models)
+  let modelsError = $derived($modelStore.error)
+  let operation = $derived($modelStore.operation)
+  let pending = $derived($modelStore.pending)
+  let activeDownloadId = $derived(
+    operation?.kind === 'download'
+      ? operation.id
+      : pending?.kind === 'download'
+        ? pending.id
+        : null,
+  )
+  let activeRemoveId = $derived(
+    operation?.kind === 'remove'
+      ? operation.id
+      : pending?.kind === 'remove'
+        ? pending.id
+        : null,
+  )
+  let cancellingDownload = $derived(operation?.phase === 'cancelling')
+  let operationBusy = $derived(operation !== null || pending !== null)
   let whisperModels = $derived(models.filter((m) => m.role === 'final' && m.engine === 'whisper'))
   let sherpaModels = $derived(models.filter((m) => m.role === 'final' && m.engine === 'sherpa'))
   let streamingModels = $derived(previewModels(models))
-  let operationBusy = $derived(Object.values(busy).some(Boolean))
-
-  let unlisten: (() => void) | undefined
-
-  async function refreshModels() {
-    try {
-      models = await api.listModels()
-      modelsError = ''
-    } catch (err) {
-      modelsError = String(err)
-    }
-  }
 
   onMount(async () => {
-    // These two loads are independent of each other — run them concurrently
-    // instead of stalling the whole mount on the first one finishing.
-    await Promise.all([
-      refreshModels(),
-      (async () => {
-        try {
-          sttConfigured = await api.hasApiKey('stt')
-        } catch {
-          sttConfigured = false
-        }
-      })(),
-    ])
-    api.onModelProgress((p) => {
-      progress = { ...progress, [p.id]: { done: p.done, total: p.total } }
-    }).then((fn) => {
-      unlisten = fn
-    })
-  })
-
-  onDestroy(() => {
-    unlisten?.()
+    try {
+      sttConfigured = await api.hasApiKey('stt')
+    } catch {
+      sttConfigured = false
+    }
   })
 
   function progressPercent(id: string): number | null {
-    const p = progress[id]
+    const p = operation?.id === id ? operation : null
     if (!p || p.total <= 0) return null
     return Math.min(100, Math.round((p.done / p.total) * 100))
   }
 
   async function install(id: string) {
-    if (operationBusy) return
-    busy = { ...busy, [id]: true }
-    activeDownloadId = id
-    modelsError = ''
-    try {
-      const outcome = await api.downloadModel(id)
-      if (outcome === 'installed') await refreshModels()
-    } catch (err) {
-      modelsError = `Failed to download "${id}": ${String(err)}`
-    } finally {
-      busy = { ...busy, [id]: false }
-      activeDownloadId = null
-      cancellingDownload = false
-      const rest = { ...progress }
-      delete rest[id]
-      progress = rest
-    }
+    await modelStore.install(id)
   }
 
   async function cancelDownload(id: string) {
-    if (activeDownloadId !== id || cancellingDownload) return
-    cancellingDownload = true
-    modelsError = ''
-    try {
-      await api.cancelModelDownload(id)
-    } catch (err) {
-      cancellingDownload = false
-      modelsError = `Failed to cancel "${id}": ${String(err)}`
-    }
+    await modelStore.cancel(id)
   }
 
   async function remove(id: string) {
-    if (operationBusy) return
-    busy = { ...busy, [id]: true }
-    modelsError = ''
-    try {
-      await api.removeModel(id)
-      await refreshModels()
-    } catch (err) {
-      modelsError = `Failed to remove "${id}": ${String(err)}`
-    } finally {
-      busy = { ...busy, [id]: false }
-    }
+    await modelStore.remove(id)
   }
 
   async function saveSttKey() {
@@ -142,7 +94,9 @@
             <span class="model-size">{modelCapabilityLabel(model)} · {model.size_mb} MB</span>
           </div>
           <div class="model-actions">
-            {#if model.installed}
+            {#if activeRemoveId === model.id}
+              <button type="button" disabled>Removing…</button>
+            {:else if model.installed}
               <span class="badge badge-installed">Installed</span>
               <button type="button" onclick={() => remove(model.id)} disabled={operationBusy}>
                 Remove
@@ -181,7 +135,9 @@
             <span class="model-size">{modelCapabilityLabel(model)} · {model.size_mb} MB</span>
           </div>
           <div class="model-actions">
-            {#if model.installed}
+            {#if activeRemoveId === model.id}
+              <button type="button" disabled>Removing…</button>
+            {:else if model.installed}
               <span class="badge badge-installed">Installed</span>
               <button type="button" onclick={() => remove(model.id)} disabled={operationBusy}>
                 Remove
@@ -220,7 +176,9 @@
             <span class="model-size">{modelCapabilityLabel(model)} · {model.size_mb} MB</span>
           </div>
           <div class="model-actions">
-            {#if model.installed}
+            {#if activeRemoveId === model.id}
+              <button type="button" disabled>Removing…</button>
+            {:else if model.installed}
               <span class="badge badge-installed">Installed</span>
               <button type="button" onclick={() => remove(model.id)} disabled={operationBusy}>
                 Remove

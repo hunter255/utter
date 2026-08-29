@@ -20,7 +20,7 @@ use utter_core::{TextRefiner, Tone};
 use utter_refine::{LlmConfig, LlmRefiner};
 use utter_store::{DownloadCancelled, HistoryEntry, ModelInfo, Settings};
 
-use crate::events::{ModelProgress, Notice};
+use crate::events::{ModelOperationSnapshot, Notice};
 use crate::permissions::PermissionReport;
 use crate::state::AppState;
 use crate::{keyring_password, KEYRING_SERVICE, REFINE_KEY_SERVICE, STT_KEY_SERVICE};
@@ -29,7 +29,7 @@ use crate::{keyring_password, KEYRING_SERVICE, REFINE_KEY_SERVICE, STT_KEY_SERVI
 const HISTORY_LIST_LIMIT: u32 = 500;
 
 /// How often `download_model`'s progress callback is allowed to emit a
-/// `model-progress` event, at minimum — throttled to avoid flooding the
+/// `model-operation` event, at minimum — throttled to avoid flooding the
 /// frontend with an event per 64 KiB chunk on a fast connection.
 const PROGRESS_MIN_INTERVAL: Duration = Duration::from_millis(500);
 /// ... or after this many percentage points of additional progress,
@@ -195,6 +195,18 @@ pub async fn list_models(app: AppHandle) -> Vec<ModelInfo> {
     .unwrap_or_default()
 }
 
+/// Returns the current model mutation even if the page that started it has
+/// since been unmounted. The frontend subscribes to events before reading
+/// this snapshot, closing the usual listener-registration race.
+#[tauri::command]
+pub fn model_operation_state(state: State<AppState>) -> Result<ModelOperationSnapshot, String> {
+    state.model_operations.snapshot()
+}
+
+fn emit_model_operation(app: &AppHandle, snapshot: ModelOperationSnapshot) {
+    let _ = app.emit("model-operation", snapshot);
+}
+
 #[tauri::command]
 pub async fn download_model(app: AppHandle, id: String) -> Result<ModelDownloadOutcome, String> {
     let (models, lease, cancellation) = {
@@ -203,14 +215,24 @@ pub async fn download_model(app: AppHandle, id: String) -> Result<ModelDownloadO
         (state.models.clone(), lease, cancellation)
     };
 
+    let generation = lease.generation();
+    emit_model_operation(
+        &app,
+        ModelOperationSnapshot {
+            generation,
+            operation: app
+                .state::<AppState>()
+                .model_operations
+                .snapshot()?
+                .operation,
+        },
+    );
+
     let progress_app = app.clone();
     let fallback_app = app.clone();
-    let progress_id = id.clone();
     let download_id = id.clone();
 
     let result = tauri::async_runtime::spawn_blocking(move || {
-        // Keep the registry occupied through cleanup on every return path.
-        let _lease = lease;
         let mut last_emitted_done = 0u64;
         let mut last_emit_at = Instant::now();
         let mut fallback_announced = false;
@@ -230,6 +252,7 @@ pub async fn download_model(app: AppHandle, id: String) -> Result<ModelDownloadO
                 }
             },
             &mut |done, total| {
+                let operation = lease.update_progress(done, total).ok().flatten();
                 let now = Instant::now();
                 if should_emit_progress(
                     done,
@@ -241,20 +264,32 @@ pub async fn download_model(app: AppHandle, id: String) -> Result<ModelDownloadO
                 ) {
                     last_emitted_done = done;
                     last_emit_at = now;
-                    let _ = progress_app.emit(
-                        "model-progress",
-                        ModelProgress {
-                            id: progress_id.clone(),
-                            done,
-                            total,
-                        },
-                    );
+                    if let Some(operation) = operation {
+                        emit_model_operation(
+                            &progress_app,
+                            ModelOperationSnapshot {
+                                generation,
+                                operation: Some(operation),
+                            },
+                        );
+                    }
                 }
             },
         )
     })
-    .await
-    .map_err(|e| format!("download task failed to run: {e}"))?;
+    .await;
+
+    // The lease is dropped inside the blocking task on success, error, or
+    // unwind. Retain its generation in the empty event so a delayed old
+    // completion cannot clear a newer operation in the UI.
+    emit_model_operation(
+        &app,
+        ModelOperationSnapshot {
+            generation,
+            operation: None,
+        },
+    );
+    let result = result.map_err(|e| format!("download task failed to run: {e}"))?;
 
     match result {
         Ok(_path) => Ok(ModelDownloadOutcome::Installed),
@@ -268,11 +303,24 @@ pub async fn download_model(app: AppHandle, id: String) -> Result<ModelDownloadO
 /// Requests cooperative cancellation; `download_model` resolves only after
 /// the blocking worker has stopped safely; resumable staging may remain.
 #[tauri::command]
-pub fn cancel_model_download(id: String, state: State<AppState>) -> Result<(), String> {
-    state.model_operations.cancel_download(&id).map(|_| ())
+pub fn cancel_model_download(
+    app: AppHandle,
+    id: String,
+    state: State<AppState>,
+) -> Result<(), String> {
+    if let Some(operation) = state.model_operations.cancel_download(&id)? {
+        emit_model_operation(
+            &app,
+            ModelOperationSnapshot {
+                generation: operation.generation,
+                operation: Some(operation),
+            },
+        );
+    }
+    Ok(())
 }
 
-/// Decides whether a `model-progress` event should be emitted now.
+/// Decides whether a `model-operation` progress snapshot should be emitted.
 ///
 /// Always emits at the very start (`done == 0`) and at completion
 /// (`total > 0 && done >= total`); otherwise throttles to at most once per
@@ -312,6 +360,18 @@ pub async fn remove_model(app: AppHandle, id: String) -> Result<(), String> {
         let lease = state.model_operations.begin_remove(&id)?;
         (state.models.clone(), lease)
     };
+    let generation = lease.generation();
+    emit_model_operation(
+        &app,
+        ModelOperationSnapshot {
+            generation,
+            operation: app
+                .state::<AppState>()
+                .model_operations
+                .snapshot()?
+                .operation,
+        },
+    );
     let remove_id = id.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let _lease = lease;
@@ -319,8 +379,16 @@ pub async fn remove_model(app: AppHandle, id: String) -> Result<(), String> {
             .remove(&remove_id)
             .map_err(|e| format!("failed to remove model '{remove_id}': {e}"))
     })
-    .await
-    .map_err(|e| format!("remove_model task failed to run: {e}"))?;
+    .await;
+
+    emit_model_operation(
+        &app,
+        ModelOperationSnapshot {
+            generation,
+            operation: None,
+        },
+    );
+    let result = result.map_err(|e| format!("remove_model task failed to run: {e}"))?;
 
     result
 }
