@@ -230,6 +230,7 @@ pub async fn download_model(app: AppHandle, id: String) -> Result<ModelDownloadO
 
     let progress_app = app.clone();
     let fallback_app = app.clone();
+    let activation_app = app.clone();
     let download_id = id.clone();
 
     let result = tauri::async_runtime::spawn_blocking(move || {
@@ -237,7 +238,7 @@ pub async fn download_model(app: AppHandle, id: String) -> Result<ModelDownloadO
         let mut last_emit_at = Instant::now();
         let mut fallback_announced = false;
 
-        models.download_with_cancellation_and_source(
+        let result = models.download_with_cancellation_and_source(
             &download_id,
             &cancellation,
             &mut |source, fallback| {
@@ -275,7 +276,28 @@ pub async fn download_model(app: AppHandle, id: String) -> Result<ModelDownloadO
                     }
                 }
             },
-        )
+        );
+
+        // The settings save and this refresh share the settings lock, so a
+        // model selected immediately before Install cannot race a stale
+        // runtime rebuild. Engines are still loaded lazily; rebuilding here
+        // only replaces the registry so the newly verified model is eligible
+        // on the very next hotkey press.
+        let activation_error = if result.is_ok() {
+            let state = activation_app.state::<AppState>();
+            let settings = state
+                .settings
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            rebuild_if_model_selected(&settings, &download_id, |settings| {
+                crate::runtime_boot::rebuild(&activation_app, &state, settings)
+            })
+            .err()
+        } else {
+            None
+        };
+
+        (result, activation_error)
     })
     .await;
 
@@ -289,7 +311,17 @@ pub async fn download_model(app: AppHandle, id: String) -> Result<ModelDownloadO
             operation: None,
         },
     );
-    let result = result.map_err(|e| format!("download task failed to run: {e}"))?;
+    let (result, activation_error) =
+        result.map_err(|e| format!("download task failed to run: {e}"))?;
+
+    if let Some(error) = activation_error {
+        crate::sink::notify_warning(
+            &app,
+            &format!(
+                "The model was installed, but Utter could not activate it yet: {error}. Save the profile again or restart Utter."
+            ),
+        );
+    }
 
     match result {
         Ok(_path) => Ok(ModelDownloadOutcome::Installed),
@@ -298,6 +330,35 @@ pub async fn download_model(app: AppHandle, id: String) -> Result<ModelDownloadO
         }
         Err(error) => Err(format!("failed to download model '{id}': {error}")),
     }
+}
+
+/// Rebuilds the runtime exactly once when `id` is selected by any active
+/// final engine or live-preview slot. Keeping the decision separate makes
+/// the no-rebuild cases testable without constructing a Tauri app/runtime.
+fn rebuild_if_model_selected(
+    settings: &Settings,
+    id: &str,
+    rebuild: impl FnOnce(&Settings) -> Result<(), String>,
+) -> Result<bool, String> {
+    let selected = settings.profiles.iter().any(|profile| {
+        let final_model = match profile.engine.active {
+            utter_store::settings::EngineKind::Whisper => {
+                Some(profile.engine.whisper_model.as_str())
+            }
+            utter_store::settings::EngineKind::Sherpa => profile.engine.sherpa_model.as_deref(),
+            utter_store::settings::EngineKind::Cloud => None,
+        };
+        final_model == Some(id)
+            || profile
+                .draft
+                .as_ref()
+                .is_some_and(|draft| draft.model == id)
+    });
+    if !selected {
+        return Ok(false);
+    }
+    rebuild(settings)?;
+    Ok(true)
 }
 
 /// Requests cooperative cancellation; `download_model` resolves only after
@@ -633,6 +694,8 @@ pub async fn test_refine(app: AppHandle, sample: String) -> Result<String, Strin
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use super::*;
 
     #[test]
@@ -645,6 +708,47 @@ mod tests {
             serde_json::to_value(ModelDownloadOutcome::Cancelled).expect("serialize"),
             serde_json::json!("cancelled")
         );
+    }
+
+    #[test]
+    fn selected_model_rebuilds_runtime_exactly_once() {
+        let mut settings = Settings::default();
+        let profile = &mut settings.profiles[0];
+        profile.engine.active = utter_store::settings::EngineKind::Whisper;
+        profile.engine.whisper_model = "tiny".to_string();
+        profile.draft = Some(utter_store::DraftCfg {
+            model: "tiny".to_string(),
+        });
+        let calls = Cell::new(0);
+
+        let rebuilt = rebuild_if_model_selected(&settings, "tiny", |_| {
+            calls.set(calls.get() + 1);
+            Ok(())
+        })
+        .expect("rebuild");
+
+        assert!(rebuilt);
+        assert_eq!(calls.get(), 1, "one model used twice still rebuilds once");
+    }
+
+    #[test]
+    fn unselected_or_inactive_model_does_not_rebuild_runtime() {
+        let mut settings = Settings::default();
+        let profile = &mut settings.profiles[0];
+        profile.engine.active = utter_store::settings::EngineKind::Sherpa;
+        profile.engine.whisper_model = "tiny".to_string();
+        profile.engine.sherpa_model = Some("gigaam-v3-ru".to_string());
+        profile.draft = None;
+        let calls = Cell::new(0);
+
+        let rebuilt = rebuild_if_model_selected(&settings, "tiny", |_| {
+            calls.set(calls.get() + 1);
+            Ok(())
+        })
+        .expect("decision");
+
+        assert!(!rebuilt);
+        assert_eq!(calls.get(), 0);
     }
 
     #[test]

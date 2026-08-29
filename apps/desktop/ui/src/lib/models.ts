@@ -62,6 +62,12 @@ export function modelCapabilityLabel(model: ModelInfo): string {
     .join(' · ')
 }
 
+export function modelAvailabilityLabel(model: ModelInfo): string {
+  if (model.status === 'ready') return 'installed'
+  if (model.status === 'damaged') return 'damaged — re-download required'
+  return 'not downloaded'
+}
+
 /** Whether a profile's explicit BCP-47 hint is compatible with a model.
  * Empty/`auto` is always accepted: it asks the engine to use its own coverage
  * and must not create a false warning for multilingual Whisper. */
@@ -91,7 +97,7 @@ export function transcriptionModelOptions(
 ): { value: string; label: string }[] {
   return transcriptionModels(models).map((m) => ({
     value: m.id,
-    label: `${m.engine === 'whisper' ? 'Whisper' : 'Sherpa-onnx'} — ${m.label} — ${modelCapabilityLabel(m)} — ${m.size_mb} MB${m.installed ? ' — installed' : ''}`,
+    label: `${m.engine === 'whisper' ? 'Whisper' : 'Sherpa-onnx'} — ${m.label} — ${modelCapabilityLabel(m)} — ${m.size_mb} MB — ${modelAvailabilityLabel(m)}`,
   }))
 }
 
@@ -104,18 +110,15 @@ export function previewModels(models: ModelInfo[]): ModelInfo[] {
  * first (the default — an empty value the caller maps back to a `null`
  * `LanguageProfile.draft`), then one entry per streaming model.
  *
- * A model that is not installed yet is still offered, but says so: selecting
- * one is legal and saves fine, it simply produces no preview until the model
- * is downloaded on the Engines page *and* the app is restarted, since a
- * profile's engines are built once and cached for the run. Naming that up
- * front is what pushes the working order — download first, then select — for
- * a picker that otherwise looks like every option in it is ready to use. */
+ * A model that is not installed yet is still offered, but says so. The
+ * profile page renders `ModelInstallAction` directly below this selector, so
+ * the user can finish setup without navigating to the full model library. */
 export function previewModelOptions(models: ModelInfo[]): { value: string; label: string }[] {
   return [
     { value: '', label: 'Off' },
     ...previewModels(models).map((m) => ({
       value: m.id,
-      label: `${m.label} — ${modelCapabilityLabel(m)}${m.installed ? '' : ' (not downloaded)'}`,
+      label: `${m.label} — ${modelCapabilityLabel(m)} (${modelAvailabilityLabel(m)})`,
     })),
   ]
 }

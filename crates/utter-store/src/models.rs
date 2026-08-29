@@ -112,6 +112,18 @@ pub enum PerformanceClass {
     Heavy,
 }
 
+/// Filesystem readiness shown by the settings UI. `Damaged` means every
+/// expected artifact exists but at least one has the wrong byte length, so
+/// the native decoder must not receive it and a verified re-download is the
+/// safe recovery action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelInstallStatus {
+    Missing,
+    Ready,
+    Damaged,
+}
+
 /// A speech-to-text model available for download, with its installed state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ModelInfo {
@@ -120,6 +132,7 @@ pub struct ModelInfo {
     pub label: String,
     pub size_mb: u32,
     pub installed: bool,
+    pub status: ModelInstallStatus,
     /// BCP-47 language prefixes, or `"*"` for broadly multilingual models.
     pub supported_languages: Vec<String>,
     pub role: ModelRole,
@@ -607,12 +620,14 @@ impl ModelManager {
             .iter()
             .map(|entry| {
                 let path = self.install_path(entry);
+                let status = self.install_status(entry, &path);
                 ModelInfo {
                     id: entry.id.to_string(),
                     engine: entry.engine.to_string(),
                     label: entry.label.to_string(),
                     size_mb: entry.size_mb,
-                    installed: self.is_installed(entry, &path),
+                    installed: status == ModelInstallStatus::Ready,
+                    status,
                     supported_languages: entry
                         .supported_languages
                         .iter()
@@ -900,6 +915,24 @@ impl ModelManager {
             .artifacts
             .iter()
             .all(|a| artifact_path(entry, path, a).is_file())
+    }
+
+    fn install_status(&self, entry: &CatalogEntry, path: &Path) -> ModelInstallStatus {
+        if !self.is_installed(entry, path) {
+            return if path.exists() {
+                ModelInstallStatus::Damaged
+            } else {
+                ModelInstallStatus::Missing
+            };
+        }
+        if entry.artifacts.iter().all(|artifact| {
+            fs::metadata(artifact_path(entry, path, artifact))
+                .is_ok_and(|metadata| metadata.len() == artifact.size_bytes)
+        }) {
+            ModelInstallStatus::Ready
+        } else {
+            ModelInstallStatus::Damaged
+        }
     }
 
     /// Verifies that every artifact of the installed model `id` is present
@@ -2266,6 +2299,7 @@ mod tests {
         let before = manager.catalog();
         assert_eq!(before.len(), 1);
         assert!(!before[0].installed, "should not be installed yet");
+        assert_eq!(before[0].status, ModelInstallStatus::Missing);
 
         let manager = tokio::task::spawn_blocking(move || {
             manager
@@ -2279,6 +2313,7 @@ mod tests {
         let after = manager.catalog();
         assert_eq!(after.len(), 1);
         assert!(after[0].installed, "should be installed after download");
+        assert_eq!(after[0].status, ModelInstallStatus::Ready);
 
         manager.remove("test-whisper").expect("remove");
         let after_remove = manager.catalog();
@@ -2286,6 +2321,7 @@ mod tests {
             !after_remove[0].installed,
             "should not be installed after removal"
         );
+        assert_eq!(after_remove[0].status, ModelInstallStatus::Missing);
     }
 
     #[test]
@@ -2301,6 +2337,7 @@ mod tests {
             models.path_for("two-file-model").is_none(),
             "a half-downloaded model must not report as installed"
         );
+        assert_eq!(models.catalog()[0].status, ModelInstallStatus::Damaged);
 
         fs::write(model_dir.join("tokens.txt"), b"x").expect("write tokens");
         assert_eq!(models.path_for("two-file-model"), Some(model_dir));
@@ -2323,6 +2360,9 @@ mod tests {
             .verify_installed("two-file-model")
             .expect_err("a wrong-sized artifact must not pass verification");
         assert!(matches!(err, IntegrityError::SizeMismatch { .. }));
+        let catalog = models.catalog();
+        assert!(!catalog[0].installed);
+        assert_eq!(catalog[0].status, ModelInstallStatus::Damaged);
     }
 
     #[test]

@@ -42,7 +42,7 @@ export interface ModelStore extends Readable<ModelStoreState> {
   start(): Promise<void>
   stop(): void
   refresh(): Promise<void>
-  install(id: string): Promise<void>
+  install(id: string, beforeStart?: () => Promise<void>): Promise<void>
   cancel(id: string): Promise<void>
   remove(id: string): Promise<void>
 }
@@ -167,14 +167,15 @@ export function createModelStore(backend: ModelBackend = api): ModelStore {
     )
   }
 
-  async function install(id: string): Promise<void> {
+  async function install(id: string, beforeStart?: () => Promise<void>): Promise<void> {
     if (!reserve(id, 'download')) return
     const startGeneration = current.generation
     try {
+      await beforeStart?.()
       await backend.downloadModel(id)
       await settleOperation(startGeneration)
     } catch (error) {
-      setError(`Failed to download "${id}": ${String(error)}`)
+      setError(`Failed to install "${id}": ${String(error)}`)
     } finally {
       releasePending(id)
     }
