@@ -254,6 +254,26 @@ export function deepEqual(a: unknown, b: unknown): boolean {
 /** `crates/utter-store/src/models.rs::ModelInfo` */
 export type ModelRole = 'final' | 'preview'
 export type PerformanceClass = 'fast' | 'balanced' | 'heavy'
+export type RecommendationCode =
+  | 'lowest_latency'
+  | 'lower_accuracy'
+  | 'lightweight'
+  | 'balanced_multilingual'
+  | 'higher_accuracy'
+  | 'high_accuracy'
+  | 'mixed_language'
+  | 'mixed_russian_english'
+  | 'stable_quality'
+  | 'recommended_russian'
+  | 'recommended_english'
+  | 'punctuation_included'
+  | 'live_preview_only'
+  | 'accuracy_russian_preview'
+  | 'no_dictionary_bias'
+  | 'cpu_only'
+  | 'lowercase_cyrillic'
+  | 'russian_english_code_switching'
+  | 'automatic_language_detection'
 export type ModelDownloadOutcome = 'installed' | 'cancelled'
 export type ModelInstallStatus = 'missing' | 'ready' | 'damaged'
 
@@ -268,7 +288,7 @@ export interface ModelInfo {
   supported_languages: string[]
   role: ModelRole
   performance_class: PerformanceClass
-  recommendation_tags: string[]
+  recommendation_codes: RecommendationCode[]
 }
 
 /** `crates/utter-store/src/history.rs::HistoryEntry` */
@@ -365,10 +385,38 @@ export interface DictationStatePayload {
 /** `src-tauri/src/events.rs::NoticeKind` */
 export type NoticeKind = 'info' | 'warning' | 'error'
 
+/** Stable meanings for product-authored notices. Native/provider failures
+ * intentionally arrive without a code and retain their raw message. */
+export type NoticeCode =
+  | 'dictation_engine_not_running'
+  | 'nothing_heard'
+  | 'refinement_unavailable'
+  | 'automatic_paste_unavailable'
+  | 'no_language_profile'
+  | 'audio_input_unavailable'
+  | 'audio_capture_failed'
+  | 'transcription_start_failed'
+  | 'live_preview_unavailable'
+  | 'speech_engine_failed'
+  | 'speech_engine_flush_failed'
+  | 'history_save_failed'
+  | 'model_download_fallback'
+  | 'model_activation_deferred'
+  | 'dictation_setup_unavailable'
+  | 'hotkey_unavailable'
+  | 'live_preview_limited'
+  | 'refinement_api_key_optional'
+  | 'refinement_setup_unavailable'
+  | 'autostart_sync_failed'
+  | 'settings_migration_failed'
+
 /** Payload of the `notice` event (`src-tauri/src/events.rs::Notice`). */
 export interface NoticePayload {
   kind: NoticeKind
   message: string
+  code?: NoticeCode
+  args?: Record<string, string>
+  detail?: string
 }
 
 /** The two api-key "service" identities `set_api_key`/`has_api_key` accept

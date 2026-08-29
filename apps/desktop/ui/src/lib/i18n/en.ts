@@ -379,6 +379,43 @@ export const en = {
   'notice.warning': 'Warning',
   'notice.error': 'Error',
   'notice.dismiss': 'Dismiss notice',
+  'notice.technicalDetails': 'Technical details',
+  'notice.message.dictationEngineNotRunning': 'Dictation engine is not running.',
+  'notice.message.nothingHeard': 'Nothing heard.',
+  'notice.message.refinementUnavailable':
+    'Refinement is unavailable; the original transcript was inserted.',
+  'notice.message.automaticPasteUnavailable':
+    'Automatic paste was unavailable, so the text was copied to the clipboard. Check text-injection permission and keep the target field focused.',
+  'notice.message.noLanguageProfile':
+    'No language profile is configured, so dictation has no hotkey.',
+  'notice.message.audioInputUnavailable':
+    'Audio input “{device}” is unavailable. The system default is being used for this run.',
+  'notice.message.audioCaptureFailed': 'Could not start microphone capture.',
+  'notice.message.transcriptionStartFailed': 'Could not start transcription.',
+  'notice.message.livePreviewUnavailable':
+    'Live preview is unavailable. Final dictation is unaffected.',
+  'notice.message.speechEngineFailed': 'The speech engine reported an error.',
+  'notice.message.speechEngineFlushFailed':
+    'The speech engine could not process the last audio frames.',
+  'notice.message.historySaveFailed': 'The dictation could not be saved to history.',
+  'notice.message.modelDownloadFallback':
+    'The primary model source is unavailable. Continuing the verified download through {source}.',
+  'notice.message.modelActivationDeferred':
+    'The model was installed but could not be activated yet. Save the profile again or restart Utter.',
+  'notice.message.dictationSetupUnavailable':
+    'This dictation profile needs attention. Check its engine and model in Settings.',
+  'notice.message.hotkeyUnavailable':
+    'A dictation hotkey is unavailable. Check the profile hotkey and macOS permissions.',
+  'notice.message.livePreviewLimited':
+    'The selected preview model has limited dictionary support. Final dictation is unaffected.',
+  'notice.message.refinementApiKeyOptional':
+    'Refinement has no API key. Local providers can work without one; add a key in Settings if your provider requires it.',
+  'notice.message.refinementSetupUnavailable':
+    'Transcript refinement is unavailable. Check the provider connection and API key in Settings.',
+  'notice.message.autostartSyncFailed':
+    'The Launch at login preference was saved, but the operating system could not apply it. Toggle it off and on in Settings.',
+  'notice.message.settingsMigrationFailed':
+    'Settings could not be upgraded. Utter is temporarily using defaults; see technical details before changing settings.',
 
   'hud.state.idle': 'Idle',
   'hud.state.recording': 'Listening',

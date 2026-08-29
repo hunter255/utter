@@ -11,6 +11,7 @@
   import Toggle from '../lib/components/Toggle.svelte'
   import {
     formatPercent,
+    locale,
     normalizeLocalePreference,
     t,
     type MessageKey,
@@ -198,7 +199,7 @@
     diagnosticsMessage = ''
     diagnosticsError = ''
     try {
-      const report = await api.copyDiagnostics()
+      const report = await api.copyDiagnostics($locale)
       await navigator.clipboard.writeText(report)
       diagnosticsMessage = $t('settings.reportCopied')
     } catch (err) {

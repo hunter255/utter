@@ -4,29 +4,29 @@
 // right selector with the right language warning.
 
 import { formatBytes, translate, type MessageKey, type Translator } from './i18n'
-import type { ModelInfo } from './types'
+import type { ModelInfo, RecommendationCode } from './types'
 
-const RECOMMENDATION_KEYS: Record<string, MessageKey> = {
-  'Lowest latency': 'model.recommendation.lowestLatency',
-  'Lower accuracy': 'model.recommendation.lowerAccuracy',
-  Lightweight: 'model.recommendation.lightweight',
-  'Balanced multilingual': 'model.recommendation.balancedMultilingual',
-  'Higher accuracy': 'model.recommendation.higherAccuracy',
-  'High accuracy': 'model.recommendation.highAccuracy',
-  'Mixed language': 'model.recommendation.mixedLanguage',
-  'Mixed Russian + English': 'model.recommendation.mixedRussianEnglish',
-  'Stable quality': 'model.recommendation.stableQuality',
-  'Recommended for Russian': 'model.recommendation.recommendedRussian',
-  'Recommended for English': 'model.recommendation.recommendedEnglish',
-  'Punctuation included': 'model.recommendation.punctuationIncluded',
-  'Live preview only': 'model.recommendation.livePreviewOnly',
-  'Accuracy-focused Russian preview': 'model.recommendation.accuracyRussianPreview',
-  'No dictionary bias': 'model.recommendation.noDictionaryBias',
-  'CPU only': 'model.recommendation.cpuOnly',
-  'Lowercase Cyrillic; no punctuation, digits, or Latin':
+const RECOMMENDATION_KEYS: Record<RecommendationCode, MessageKey> = {
+  lowest_latency: 'model.recommendation.lowestLatency',
+  lower_accuracy: 'model.recommendation.lowerAccuracy',
+  lightweight: 'model.recommendation.lightweight',
+  balanced_multilingual: 'model.recommendation.balancedMultilingual',
+  higher_accuracy: 'model.recommendation.higherAccuracy',
+  high_accuracy: 'model.recommendation.highAccuracy',
+  mixed_language: 'model.recommendation.mixedLanguage',
+  mixed_russian_english: 'model.recommendation.mixedRussianEnglish',
+  stable_quality: 'model.recommendation.stableQuality',
+  recommended_russian: 'model.recommendation.recommendedRussian',
+  recommended_english: 'model.recommendation.recommendedEnglish',
+  punctuation_included: 'model.recommendation.punctuationIncluded',
+  live_preview_only: 'model.recommendation.livePreviewOnly',
+  accuracy_russian_preview: 'model.recommendation.accuracyRussianPreview',
+  no_dictionary_bias: 'model.recommendation.noDictionaryBias',
+  cpu_only: 'model.recommendation.cpuOnly',
+  lowercase_cyrillic:
     'model.recommendation.lowercaseCyrillic',
-  'Russian + English code-switching': 'model.recommendation.russianEnglishCodeSwitching',
-  'Automatic language detection': 'model.recommendation.automaticLanguageDetection',
+  russian_english_code_switching: 'model.recommendation.russianEnglishCodeSwitching',
+  automatic_language_detection: 'model.recommendation.automaticLanguageDetection',
 }
 
 /** Catalog entries that can produce the final transcript inserted into the
@@ -78,9 +78,8 @@ function performanceLabel(model: ModelInfo, translator: Translator): string {
   return translator('model.performance.heavy')
 }
 
-function recommendationLabel(tag: string, translator: Translator): string {
-  const key = RECOMMENDATION_KEYS[tag]
-  return key ? translator(key) : tag
+function recommendationLabel(code: RecommendationCode, translator: Translator): string {
+  return translator(RECOMMENDATION_KEYS[code])
 }
 
 /** Compact, qualitative summary. It deliberately carries no timings because
@@ -89,7 +88,7 @@ export function modelCapabilityLabel(model: ModelInfo, translator: Translator = 
   return [
     modelLanguageLabel(model, translator),
     performanceLabel(model, translator),
-    ...model.recommendation_tags.map((tag) => recommendationLabel(tag, translator)),
+    ...model.recommendation_codes.map((code) => recommendationLabel(code, translator)),
   ]
     .filter(Boolean)
     .join(' · ')

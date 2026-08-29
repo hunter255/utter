@@ -112,6 +112,33 @@ pub enum PerformanceClass {
     Heavy,
 }
 
+/// Stable qualitative reasons to choose a model. These are wire codes, not
+/// English UI copy: the desktop translates them in the active interface
+/// locale and a new language never requires editing the model catalog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecommendationCode {
+    LowestLatency,
+    LowerAccuracy,
+    Lightweight,
+    BalancedMultilingual,
+    HigherAccuracy,
+    HighAccuracy,
+    MixedLanguage,
+    MixedRussianEnglish,
+    StableQuality,
+    RecommendedRussian,
+    RecommendedEnglish,
+    PunctuationIncluded,
+    LivePreviewOnly,
+    AccuracyRussianPreview,
+    NoDictionaryBias,
+    CpuOnly,
+    LowercaseCyrillic,
+    RussianEnglishCodeSwitching,
+    AutomaticLanguageDetection,
+}
+
 /// Filesystem readiness shown by the settings UI. `Damaged` means every
 /// expected artifact exists but at least one has the wrong byte length, so
 /// the native decoder must not receive it and a verified re-download is the
@@ -139,7 +166,7 @@ pub struct ModelInfo {
     pub performance_class: PerformanceClass,
     /// Short, user-facing reasons to choose this model. These are qualitative
     /// recommendations, not hardware-independent benchmark promises.
-    pub recommendation_tags: Vec<String>,
+    pub recommendation_codes: Vec<RecommendationCode>,
 }
 
 /// One downloadable file that makes up a catalog entry.
@@ -184,7 +211,7 @@ struct CatalogEntry {
     role: ModelRole,
     streaming_family: Option<StreamingModelFamily>,
     performance_class: PerformanceClass,
-    recommendation_tags: &'static [&'static str],
+    recommendation_codes: &'static [RecommendationCode],
     /// Ordered, trusted endpoint substitutions. Every resulting source still
     /// shares this entry's pinned size and SHA-256 contract.
     mirrors: &'static [SourceMirror],
@@ -228,7 +255,10 @@ const CATALOG: &[CatalogEntry] = &[
         role: ModelRole::Final,
         streaming_family: None,
         performance_class: PerformanceClass::Fast,
-        recommendation_tags: &["Lowest latency", "Lower accuracy"],
+        recommendation_codes: &[
+            RecommendationCode::LowestLatency,
+            RecommendationCode::LowerAccuracy,
+        ],
         mirrors: HUGGING_FACE_MIRRORS,
         artifacts: &[Artifact {
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
@@ -246,7 +276,10 @@ const CATALOG: &[CatalogEntry] = &[
         role: ModelRole::Final,
         streaming_family: None,
         performance_class: PerformanceClass::Fast,
-        recommendation_tags: &["Lightweight", "Lower accuracy"],
+        recommendation_codes: &[
+            RecommendationCode::Lightweight,
+            RecommendationCode::LowerAccuracy,
+        ],
         mirrors: HUGGING_FACE_MIRRORS,
         artifacts: &[Artifact {
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
@@ -264,7 +297,7 @@ const CATALOG: &[CatalogEntry] = &[
         role: ModelRole::Final,
         streaming_family: None,
         performance_class: PerformanceClass::Balanced,
-        recommendation_tags: &["Balanced multilingual"],
+        recommendation_codes: &[RecommendationCode::BalancedMultilingual],
         mirrors: HUGGING_FACE_MIRRORS,
         artifacts: &[Artifact {
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
@@ -282,7 +315,7 @@ const CATALOG: &[CatalogEntry] = &[
         role: ModelRole::Final,
         streaming_family: None,
         performance_class: PerformanceClass::Heavy,
-        recommendation_tags: &["Higher accuracy"],
+        recommendation_codes: &[RecommendationCode::HigherAccuracy],
         mirrors: HUGGING_FACE_MIRRORS,
         artifacts: &[Artifact {
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",
@@ -300,7 +333,10 @@ const CATALOG: &[CatalogEntry] = &[
         role: ModelRole::Final,
         streaming_family: None,
         performance_class: PerformanceClass::Balanced,
-        recommendation_tags: &["High accuracy", "Mixed language"],
+        recommendation_codes: &[
+            RecommendationCode::HighAccuracy,
+            RecommendationCode::MixedLanguage,
+        ],
         mirrors: HUGGING_FACE_MIRRORS,
         artifacts: &[Artifact {
             url:
@@ -319,7 +355,7 @@ const CATALOG: &[CatalogEntry] = &[
         role: ModelRole::Final,
         streaming_family: None,
         performance_class: PerformanceClass::Heavy,
-        recommendation_tags: &["Mixed Russian + English"],
+        recommendation_codes: &[RecommendationCode::MixedRussianEnglish],
         mirrors: &[],
         artifacts: &[Artifact {
             url: "https://blob.handy.computer/breeze-asr-q5_k.bin",
@@ -337,7 +373,7 @@ const CATALOG: &[CatalogEntry] = &[
         role: ModelRole::Final,
         streaming_family: None,
         performance_class: PerformanceClass::Heavy,
-        recommendation_tags: &["Stable quality"],
+        recommendation_codes: &[RecommendationCode::StableQuality],
         mirrors: HUGGING_FACE_MIRRORS,
         artifacts: &[Artifact {
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/bf8b606c2fcd9173605cdf6bd2ac8a75a8141b6c/ggml-large-v2-q5_0.bin",
@@ -355,7 +391,10 @@ const CATALOG: &[CatalogEntry] = &[
         role: ModelRole::Final,
         streaming_family: None,
         performance_class: PerformanceClass::Fast,
-        recommendation_tags: &["Recommended for Russian", "Punctuation included"],
+        recommendation_codes: &[
+            RecommendationCode::RecommendedRussian,
+            RecommendationCode::PunctuationIncluded,
+        ],
         mirrors: HUGGING_FACE_MIRRORS,
         artifacts: &[
             Artifact {
@@ -393,7 +432,10 @@ const CATALOG: &[CatalogEntry] = &[
         role: ModelRole::Final,
         streaming_family: None,
         performance_class: PerformanceClass::Fast,
-        recommendation_tags: &["Recommended for English", "Punctuation included"],
+        recommendation_codes: &[
+            RecommendationCode::RecommendedEnglish,
+            RecommendationCode::PunctuationIncluded,
+        ],
         mirrors: HUGGING_FACE_MIRRORS,
         artifacts: &[
             Artifact {
@@ -431,7 +473,7 @@ const CATALOG: &[CatalogEntry] = &[
         role: ModelRole::Preview,
         streaming_family: Some(StreamingModelFamily::Transducer),
         performance_class: PerformanceClass::Fast,
-        recommendation_tags: &["Live preview only"],
+        recommendation_codes: &[RecommendationCode::LivePreviewOnly],
         mirrors: HUGGING_FACE_MIRRORS,
         artifacts: &[
             Artifact {
@@ -475,11 +517,11 @@ const CATALOG: &[CatalogEntry] = &[
         role: ModelRole::Preview,
         streaming_family: Some(StreamingModelFamily::TOneCtc),
         performance_class: PerformanceClass::Balanced,
-        recommendation_tags: &[
-            "Accuracy-focused Russian preview",
-            "Live preview only",
-            "No dictionary bias",
-            "Lowercase Cyrillic; no punctuation, digits, or Latin",
+        recommendation_codes: &[
+            RecommendationCode::AccuracyRussianPreview,
+            RecommendationCode::LivePreviewOnly,
+            RecommendationCode::NoDictionaryBias,
+            RecommendationCode::LowercaseCyrillic,
         ],
         mirrors: HUGGING_FACE_MIRRORS,
         artifacts: &[
@@ -513,12 +555,12 @@ const CATALOG: &[CatalogEntry] = &[
         role: ModelRole::Preview,
         streaming_family: Some(StreamingModelFamily::Nemotron),
         performance_class: PerformanceClass::Heavy,
-        recommendation_tags: &[
-            "Russian + English code-switching",
-            "Automatic language detection",
-            "Punctuation included",
-            "Live preview only",
-            "No dictionary bias",
+        recommendation_codes: &[
+            RecommendationCode::RussianEnglishCodeSwitching,
+            RecommendationCode::AutomaticLanguageDetection,
+            RecommendationCode::PunctuationIncluded,
+            RecommendationCode::LivePreviewOnly,
+            RecommendationCode::NoDictionaryBias,
         ],
         mirrors: HUGGING_FACE_MIRRORS,
         artifacts: &[
@@ -557,7 +599,7 @@ const CATALOG: &[CatalogEntry] = &[
         role: ModelRole::Preview,
         streaming_family: Some(StreamingModelFamily::Transducer),
         performance_class: PerformanceClass::Fast,
-        recommendation_tags: &["Live preview only"],
+        recommendation_codes: &[RecommendationCode::LivePreviewOnly],
         mirrors: HUGGING_FACE_MIRRORS,
         artifacts: &[
             Artifact {
@@ -635,11 +677,7 @@ impl ModelManager {
                         .collect(),
                     role: entry.role,
                     performance_class: entry.performance_class,
-                    recommendation_tags: entry
-                        .recommendation_tags
-                        .iter()
-                        .map(|tag| (*tag).to_string())
-                        .collect(),
+                    recommendation_codes: entry.recommendation_codes.to_vec(),
                 }
             })
             .collect()
@@ -1472,7 +1510,7 @@ mod tests {
             role: ModelRole::Final,
             streaming_family: None,
             performance_class: PerformanceClass::Fast,
-            recommendation_tags: &["Test model"],
+            recommendation_codes: &[RecommendationCode::CpuOnly],
             mirrors,
             artifacts: leak_artifacts(vec![Artifact {
                 url: Box::leak(url.into_boxed_str()),
@@ -1499,7 +1537,7 @@ mod tests {
             role: ModelRole::Final,
             streaming_family: None,
             performance_class: PerformanceClass::Fast,
-            recommendation_tags: &["Test model"],
+            recommendation_codes: &[RecommendationCode::CpuOnly],
             mirrors: &[],
             artifacts: &[
                 Artifact {
@@ -1535,7 +1573,7 @@ mod tests {
             role: ModelRole::Final,
             streaming_family: None,
             performance_class: PerformanceClass::Fast,
-            recommendation_tags: &["Test model"],
+            recommendation_codes: &[RecommendationCode::CpuOnly],
             mirrors: &[],
             artifacts: leak_artifacts(vec![
                 Artifact {
@@ -2668,7 +2706,7 @@ mod tests {
                 entry.id
             );
             assert!(
-                !entry.recommendation_tags.is_empty(),
+                !entry.recommendation_codes.is_empty(),
                 "{} has no recommendation tags",
                 entry.id
             );
@@ -2747,13 +2785,17 @@ mod tests {
             .contains("/9d63341e0f2d8a8b2edaa825aa1fcfe3c5283b47/tokens.txt"));
 
         assert!(entry
-            .recommendation_tags
-            .contains(&"Accuracy-focused Russian preview"));
-        assert!(entry.recommendation_tags.contains(&"Live preview only"));
-        assert!(entry.recommendation_tags.contains(&"No dictionary bias"));
+            .recommendation_codes
+            .contains(&RecommendationCode::AccuracyRussianPreview));
         assert!(entry
-            .recommendation_tags
-            .contains(&"Lowercase Cyrillic; no punctuation, digits, or Latin"));
+            .recommendation_codes
+            .contains(&RecommendationCode::LivePreviewOnly));
+        assert!(entry
+            .recommendation_codes
+            .contains(&RecommendationCode::NoDictionaryBias));
+        assert!(entry
+            .recommendation_codes
+            .contains(&RecommendationCode::LowercaseCyrillic));
     }
 
     #[test]
@@ -2782,12 +2824,14 @@ mod tests {
             .contains("/ab43d895f5985b1bbab8b6eac8607fcdc05343f3/encoder.int8.onnx"));
 
         assert!(entry
-            .recommendation_tags
-            .contains(&"Russian + English code-switching"));
+            .recommendation_codes
+            .contains(&RecommendationCode::RussianEnglishCodeSwitching));
         assert!(entry
-            .recommendation_tags
-            .contains(&"Automatic language detection"));
-        assert!(entry.recommendation_tags.contains(&"Live preview only"));
+            .recommendation_codes
+            .contains(&RecommendationCode::AutomaticLanguageDetection));
+        assert!(entry
+            .recommendation_codes
+            .contains(&RecommendationCode::LivePreviewOnly));
     }
 
     #[test]

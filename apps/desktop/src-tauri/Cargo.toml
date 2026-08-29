@@ -47,6 +47,7 @@ gtk = { version = "0.18", features = ["v3_24"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 accessibility-sys = "0.2"
 core-foundation = "0.10"
+core-foundation-sys = "0.8"
 core-graphics-types = "0.2"
 tauri-plugin-global-shortcut = "2.3"
 

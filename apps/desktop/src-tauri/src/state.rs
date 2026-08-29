@@ -56,10 +56,7 @@ impl PendingNotices {
         self.queued
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .push(Notice {
-                kind: parse_kind(kind),
-                message: message.to_string(),
-            });
+            .push(Notice::from_message(parse_kind(kind), message));
     }
 
     /// Hands over everything parked so far, leaving the queue empty.
@@ -393,7 +390,7 @@ pub(crate) fn history_db_path() -> Result<PathBuf> {
 mod tests {
     use super::*;
 
-    use crate::events::NoticeKind;
+    use crate::events::{NoticeCode, NoticeKind};
 
     #[test]
     fn model_operation_lease_serializes_downloads_and_removes_then_releases() {
@@ -564,6 +561,21 @@ mod tests {
             "both conditions of the same startup must survive, in order -- the throttled \
              desktop-notification channel is what only carries the first"
         );
+    }
+
+    #[test]
+    fn parked_notice_uses_the_same_stable_payload_as_a_live_notice() {
+        let message = "failed to start transcription: native decoder exploded";
+        let live = Notice::from_message(NoticeKind::Error, message);
+        let parked = PendingNotices::default();
+        parked.push("error", message);
+        let queued = parked.take().pop().expect("parked notice");
+
+        assert_eq!(queued.code, Some(NoticeCode::TranscriptionStartFailed));
+        assert_eq!(queued.code, live.code);
+        assert_eq!(queued.args, live.args);
+        assert_eq!(queued.detail, live.detail);
+        assert_eq!(queued.message, live.message);
     }
 
     /// Draining, not copying: the settings window can be closed and reopened

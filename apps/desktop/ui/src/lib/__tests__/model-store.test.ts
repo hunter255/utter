@@ -30,7 +30,7 @@ const MODEL: ModelInfo = {
   supported_languages: ['ru'],
   role: 'final',
   performance_class: 'fast',
-  recommendation_tags: [],
+  recommendation_codes: [],
 }
 
 describe('model store', () => {

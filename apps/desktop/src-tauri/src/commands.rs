@@ -606,7 +606,7 @@ pub async fn open_logs() -> Result<(), String> {
 /// Returns an allowlisted, already-redacted report. Clipboard access stays
 /// in the webview so this command needs no additional native permission.
 #[tauri::command]
-pub async fn copy_diagnostics(app: AppHandle) -> Result<String, String> {
+pub async fn copy_diagnostics(app: AppHandle, ui_locale: String) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let settings = state
@@ -614,7 +614,7 @@ pub async fn copy_diagnostics(app: AppHandle) -> Result<String, String> {
             .read()
             .map_err(|_| "settings lock poisoned".to_string())?
             .clone();
-        crate::diagnostics::diagnostic_report(&settings)
+        crate::diagnostics::diagnostic_report(&settings, &ui_locale)
     })
     .await
     .map_err(|e| format!("copy_diagnostics task failed to run: {e}"))?
