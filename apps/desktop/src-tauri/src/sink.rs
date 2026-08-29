@@ -298,6 +298,12 @@ impl EventSink for TauriEventSink {
             return;
         };
 
+        // Unlike the HUD, the menu-bar indicator stays visible for the app's
+        // whole lifetime. `tray::set_phase` coalesces the recording-level
+        // events emitted many times a second, so this only touches AppKit on
+        // an actual idle/recording/processing transition.
+        crate::tray::set_phase(&self.app, phase);
+
         // Hide (don't show) the HUD during Injecting too, not just Idle:
         // injection is synthesized right after this call returns (see
         // `runtime::dispatch`), so the HUD must already be non-visible
