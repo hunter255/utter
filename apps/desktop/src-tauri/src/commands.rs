@@ -89,7 +89,7 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
 /// `runtime_boot::rebuild`), and updates the in-memory copy.
 ///
 /// The one path every settings change goes through, whether it came from the
-/// settings UI (`save_settings`) or the tray's "Refinement" checkbox.
+/// settings UI (`save_settings`) or the tray's "Pause transcript refinement" checkbox.
 ///
 /// Holds the write lock across persist + apply + in-memory update so two
 /// concurrent callers are fully serialized instead of interleaving their

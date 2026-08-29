@@ -1,17 +1,7 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
-
   import Section from '../lib/components/Section.svelte'
-  import Field from '../lib/components/Field.svelte'
-  import TextInput from '../lib/components/TextInput.svelte'
-  import * as api from '../lib/api'
   import { modelStore } from '../lib/model-store'
   import { modelCapabilityLabel, previewModels } from '../lib/models'
-
-  let sttConfigured = $state(false)
-  let sttApiKey = $state('')
-  let sttKeyJustSaved = $state(false)
-  let sttKeyError = $state('')
 
   let models = $derived($modelStore.models)
   let modelsError = $derived($modelStore.error)
@@ -37,14 +27,6 @@
   let sherpaModels = $derived(models.filter((m) => m.role === 'final' && m.engine === 'sherpa'))
   let streamingModels = $derived(previewModels(models))
 
-  onMount(async () => {
-    try {
-      sttConfigured = await api.hasApiKey('stt')
-    } catch {
-      sttConfigured = false
-    }
-  })
-
   function progressPercent(id: string): number | null {
     const p = operation?.id === id ? operation : null
     if (!p || p.total <= 0) return null
@@ -63,23 +45,12 @@
     await modelStore.remove(id)
   }
 
-  async function saveSttKey() {
-    if (!sttApiKey.trim()) return
-    sttKeyError = ''
-    try {
-      await api.setApiKey('stt', sttApiKey)
-    } catch (err) {
-      sttKeyError = `Failed to save API key: ${String(err)}`
-      return
-    }
-    sttApiKey = ''
-    sttConfigured = true
-    sttKeyJustSaved = true
-    setTimeout(() => {
-      sttKeyJustSaved = false
-    }, 2000)
-  }
 </script>
+
+<header class="page-heading">
+  <h1>Models</h1>
+  <p>Install and remove local transcription and live-preview resources.</p>
+</header>
 
 <Section title="Whisper models" description="Runs fully offline. Larger models are more accurate but slower. Which model a profile uses is set on the Profiles page.">
   {#if modelsError}
@@ -216,26 +187,23 @@
   </ul>
 </Section>
 
-<Section title="Cloud engine" description="Credentials for an OpenAI-compatible speech-to-text endpoint. The base URL and model are set per profile on the Profiles page.">
-  <Field label="API key" for="cloud-stt-key">
-    <div class="key-row">
-      <TextInput id="cloud-stt-key" type="password" placeholder="sk-…" bind:value={() => sttApiKey, (v) => (sttApiKey = v)} />
-      <button type="button" onclick={saveSttKey} disabled={!sttApiKey.trim()}>Save</button>
-      {#if sttKeyJustSaved}
-        <span class="badge badge-installed">Saved</span>
-      {:else if sttConfigured}
-        <span class="badge badge-installed">Configured</span>
-      {:else}
-        <span class="badge badge-missing">Not set</span>
-      {/if}
-    </div>
-    {#if sttKeyError}
-      <p class="error">{sttKeyError}</p>
-    {/if}
-  </Field>
-</Section>
-
 <style>
+  .page-heading {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .page-heading h1 {
+    font-size: 20px;
+    font-weight: 700;
+  }
+
+  .page-heading p {
+    color: var(--text-muted);
+    font-size: 13px;
+  }
+
   .error {
     color: var(--danger);
     font-size: 13px;
@@ -316,11 +284,6 @@
     color: var(--accent-contrast);
   }
 
-  .badge-missing {
-    background: var(--bg-sunken);
-    color: var(--text-muted);
-  }
-
   .badge-damaged {
     background: var(--danger);
     color: var(--accent-contrast);
@@ -340,9 +303,4 @@
     transition: width 150ms ease;
   }
 
-  .key-row {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-  }
 </style>

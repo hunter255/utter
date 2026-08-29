@@ -304,6 +304,20 @@ mod tests {
     }
 
     #[test]
+    fn the_default_capability_allows_section_titles_on_the_native_window() {
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json"))
+                .expect("valid default capability");
+        let permissions = capability["permissions"]
+            .as_array()
+            .expect("permissions array");
+
+        assert!(permissions
+            .iter()
+            .any(|permission| { permission.as_str() == Some("core:window:allow-set-title") }));
+    }
+
+    #[test]
     fn release_override_creates_v2_updater_artifacts_without_changing_base_builds() {
         let base: serde_json::Value =
             serde_json::from_str(include_str!("../tauri.conf.json")).expect("valid base config");

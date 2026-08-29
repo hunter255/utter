@@ -7,6 +7,12 @@
   import * as api from './lib/api'
   import { modelStore } from './lib/model-store'
   import { noticeStore } from './lib/notices'
+  import {
+    SETTINGS_NAV,
+    resolveSettingsSection,
+    settingsWindowTitle,
+    type SettingsSection,
+  } from './lib/settings-nav'
   import { settingsStore } from './lib/stores'
   import { applyTheme } from './lib/theme'
   import { deepEqual, defaultSettings, type PlatformCapabilities } from './lib/types'
@@ -14,10 +20,9 @@
   import General from './pages/General.svelte'
   import Dictation from './pages/Dictation.svelte'
   import Profiles from './pages/Profiles.svelte'
-  import Engines from './pages/Engines.svelte'
-  import Refinement from './pages/Refinement.svelte'
-  import DictionaryPage from './pages/Dictionary.svelte'
-  import Snippets from './pages/Snippets.svelte'
+  import Models from './pages/Engines.svelte'
+  import Connections from './pages/Refinement.svelte'
+  import Vocabulary from './pages/Vocabulary.svelte'
   import History from './pages/History.svelte'
   import Advanced from './pages/Advanced.svelte'
   import Onboarding from './pages/Onboarding.svelte'
@@ -34,22 +39,19 @@
   // to the exact defaults on purpose" without one. A dedicated
   // `config_exists` command would remove this ambiguity later.
   const ONBOARDED_KEY = 'utter.onboarded'
+  const LAST_SECTION_KEY = 'utter.settings.lastSection'
 
-  const NAV: { hash: string; label: string }[] = [
-    { hash: 'general', label: 'General' },
-    { hash: 'dictation', label: 'Dictation' },
-    { hash: 'profiles', label: 'Profiles' },
-    { hash: 'engines', label: 'Engines' },
-    { hash: 'refinement', label: 'Refinement' },
-    { hash: 'dictionary', label: 'Dictionary' },
-    { hash: 'snippets', label: 'Snippets' },
-    { hash: 'history', label: 'History' },
-    { hash: 'advanced', label: 'Advanced' },
-  ]
-
-  function currentHash(): string {
+  function currentHash(): SettingsSection {
     const raw = window.location.hash.replace(/^#/, '')
-    return NAV.some((n) => n.hash === raw) ? raw : 'general'
+    const section = resolveSettingsSection(raw, localStorage.getItem(LAST_SECTION_KEY) ?? '')
+    if (window.location.hash !== `#${section}`) {
+      // Hash links are already the app's navigation primitive. Direct hash
+      // assignment also works under Tauri's custom protocol, while WebKit
+      // can reject `history.replaceState` for that protocol before Svelte
+      // has mounted and leave a blank window.
+      window.location.hash = section
+    }
+    return section
   }
 
   let hash = $state(currentHash())
@@ -120,6 +122,13 @@
   $effect(() => {
     if ($settingsStore) applyTheme($settingsStore.general.theme)
   })
+
+  $effect(() => {
+    const title = settingsWindowTitle(hash)
+    localStorage.setItem(LAST_SECTION_KEY, hash)
+    document.title = title
+    void api.setWindowTitle(title).catch(() => {})
+  })
 </script>
 
 {#if loading}
@@ -132,19 +141,24 @@
   <div class="shell">
     <nav aria-label="Settings sections">
       <div class="brand">Utter</div>
-      <ul>
-        {#each NAV as item (item.hash)}
-          <li>
-            <a
-              href="#{item.hash}"
-              aria-current={hash === item.hash ? 'page' : undefined}
-              class:active={hash === item.hash}
-            >
-              {item.label}
-            </a>
-          </li>
-        {/each}
-      </ul>
+      {#each SETTINGS_NAV as group (group.label)}
+        <section class="nav-group" aria-label={group.label}>
+          <div class="nav-group-label">{group.label}</div>
+          <ul>
+            {#each group.items as item (item.hash)}
+              <li>
+                <a
+                  href="#{item.hash}"
+                  aria-current={hash === item.hash ? 'page' : undefined}
+                  class:active={hash === item.hash}
+                >
+                  {item.label}
+                </a>
+              </li>
+            {/each}
+          </ul>
+        </section>
+      {/each}
     </nav>
     <main>
       {#if hash === 'general'}
@@ -153,14 +167,12 @@
         <Dictation />
       {:else if hash === 'profiles'}
         <Profiles {capabilities} />
-      {:else if hash === 'engines'}
-        <Engines />
-      {:else if hash === 'refinement'}
-        <Refinement />
-      {:else if hash === 'dictionary'}
-        <DictionaryPage />
-      {:else if hash === 'snippets'}
-        <Snippets />
+      {:else if hash === 'models'}
+        <Models />
+      {:else if hash === 'connections'}
+        <Connections />
+      {:else if hash === 'vocabulary'}
+        <Vocabulary />
       {:else if hash === 'history'}
         <History />
       {:else if hash === 'advanced'}
@@ -211,6 +223,21 @@
     font-weight: 700;
     font-size: 15px;
     padding: 0 var(--space-2);
+  }
+
+  .nav-group {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .nav-group-label {
+    padding: 0 var(--space-2);
+    color: var(--text-muted);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
   }
 
   ul {

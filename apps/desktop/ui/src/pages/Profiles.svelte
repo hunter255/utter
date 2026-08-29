@@ -179,12 +179,16 @@
     expandedIndex = Math.min(Math.max(0, index - 1), settings.profiles.length - 2)
   }
 
-  function connectionReady(): boolean {
-    if (!settings.refine.enabled) return false
+  function refinementConnectionState(): { ready: boolean; label: string } {
+    if (!settings.refine.enabled) {
+      return { ready: false, label: 'Refinement is paused globally' }
+    }
     const localProvider = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test(
       settings.refine.base_url,
     )
     return localProvider || refineKeyConfigured
+      ? { ready: true, label: 'Connection is ready' }
+      : { ready: false, label: 'Connection needs setup' }
   }
 </script>
 
@@ -387,9 +391,12 @@
         </Field>
 
         {#if profile.refine.enabled}
-          <div class:connection-ready={connectionReady()} class="connection-state">
-            <span>{connectionReady() ? 'Connection is ready' : 'Connection needs setup'}</span>
-            <a href="#refinement">Open connection settings</a>
+          <div
+            class:connection-ready={refinementConnectionState().ready}
+            class="connection-state"
+          >
+            <span>{refinementConnectionState().label}</span>
+            <a href="#connections">Open connection settings</a>
           </div>
           <Field label="Tone" for="profile-{index}-tone">
             <Select

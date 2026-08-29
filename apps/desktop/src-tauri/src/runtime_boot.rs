@@ -121,7 +121,7 @@ fn report_boot_notices(sink: &dyn EventSink, parked: &PendingNotices, notices: V
 /// Rebuilds the dictation runtime from `settings`: reloads the running
 /// worker if one exists, or spawns a fresh one if `boot` never got one going
 /// (e.g. it failed outright at startup). Used by `save_settings` and the
-/// tray's "Refinement" checkbox — the one path every settings change goes
+/// tray's "Pause transcript refinement" checkbox — the one path every settings change goes
 /// through to reach the live runtime.
 pub fn rebuild(app: &AppHandle, state: &AppState, settings: &Settings) -> Result<(), String> {
     let history = open_history(settings)?;

@@ -48,7 +48,7 @@
 </script>
 
 <Section
-  title="Custom terms"
+  title="Terms"
   description="Words and names hinted to the speech-to-text engine to improve recognition."
 >
   <ul class="chip-list">
@@ -65,7 +65,7 @@
   </form>
 </Section>
 
-<Section title="Replacement rules" description={'"heard X" is replaced with "write Y" before refinement.'}>
+<Section title="Replacements" description={'"heard X" is replaced with "write Y" before refinement.'}>
   {#if settings.dictionary.rules.length > 0}
     <table>
       <thead>

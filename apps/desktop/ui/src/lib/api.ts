@@ -16,6 +16,7 @@
 
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 
 import type {
   ApiKeyService,
@@ -117,6 +118,13 @@ export function installUpdate(): Promise<void> {
 
 export function platformCapabilities(): Promise<PlatformCapabilities> {
   return invoke('platform_capabilities')
+}
+
+/** Keep the native title bar in sync with the active settings destination.
+ * This is a native window API rather than a Rust command, but lives beside
+ * the other platform wrappers so components stay easy to test. */
+export function setWindowTitle(title: string): Promise<void> {
+  return getCurrentWindow().setTitle(title)
 }
 
 export function testRefine(sample: string): Promise<string> {

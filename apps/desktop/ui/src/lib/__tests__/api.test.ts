@@ -10,6 +10,10 @@ vi.mock('@tauri-apps/api/core', () => ({
 vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn(async () => () => undefined),
 }))
+const mockSetTitle = vi.fn(async () => undefined)
+vi.mock('@tauri-apps/api/window', () => ({
+  getCurrentWindow: () => ({ setTitle: mockSetTitle }),
+}))
 
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
@@ -23,6 +27,7 @@ describe('api command wrappers', () => {
   beforeEach(() => {
     mockInvoke.mockClear()
     mockListen.mockClear()
+    mockSetTitle.mockClear()
   })
 
   it('getSettings -> get_settings with no args', async () => {
@@ -132,6 +137,11 @@ describe('api command wrappers', () => {
   it('platformCapabilities -> platform_capabilities', async () => {
     await api.platformCapabilities()
     expect(mockInvoke).toHaveBeenCalledWith('platform_capabilities')
+  })
+
+  it('setWindowTitle updates the current native window', async () => {
+    await api.setWindowTitle('Models — Utter')
+    expect(mockSetTitle).toHaveBeenCalledWith('Models — Utter')
   })
 
   it('testRefine -> test_refine with a `sample` key', async () => {
