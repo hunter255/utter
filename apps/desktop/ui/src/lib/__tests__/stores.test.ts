@@ -43,6 +43,13 @@ describe('mergeDeep', () => {
     mergeDeep(base, { general: { theme: 'dark' } })
     expect(base.general.theme).toBe('system')
   })
+
+  it('changes the interface language without touching dictation profiles', () => {
+    const base = defaultSettings()
+    const merged = mergeDeep(base, { general: { language: 'ru' } })
+    expect(merged.general.language).toBe('ru')
+    expect(merged.profiles).toEqual(base.profiles)
+  })
 })
 
 describe('settings store', () => {
@@ -108,6 +115,18 @@ describe('settings store', () => {
 
     expect(backend.saveSettings).toHaveBeenCalledTimes(1)
     expect((backend.saveSettings.mock.calls[0][0] as Settings).general.theme).toBe('light')
+  })
+
+  it('persists an explicit interface language through a reload', async () => {
+    const store = createSettingsStore(backend as unknown as typeof api)
+    await store.load()
+    store.patch({ general: { language: 'ru' } })
+    await store.flush()
+
+    const saved = backend.saveSettings.mock.calls[0][0] as Settings
+    backend.getSettings.mockResolvedValue(saved)
+    const reloaded = createSettingsStore(backend as unknown as typeof api)
+    expect((await reloaded.load()).general.language).toBe('ru')
   })
 
   it('flush() with nothing pending is a no-op', async () => {

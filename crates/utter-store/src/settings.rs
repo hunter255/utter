@@ -61,12 +61,11 @@ impl Default for Settings {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct General {
-    /// A recognition-language hint, historically applied to whatever engine the (now removed)
-    /// single global config built. Since dictation routes through
-    /// [`LanguageProfile::language`](crate::profile::LanguageProfile), each profile carrying its
-    /// own tag, this field no longer affects dictation at all — kept only because nothing else
-    /// has claimed it and dropping it would be a needless settings-schema churn for a field nothing
-    /// currently reads.
+    /// Preferred interface locale. `None` follows the operating system;
+    /// currently recognized values are `en` and `ru`. This remains a string
+    /// so a config written by a newer build still loads safely — the UI
+    /// treats an unknown value as the system preference. Dictation languages
+    /// live independently on [`LanguageProfile::language`](crate::profile::LanguageProfile).
     pub language: Option<String>,
     pub theme: Theme,
     pub autostart: bool,

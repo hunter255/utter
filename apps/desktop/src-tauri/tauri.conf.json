@@ -55,7 +55,9 @@
     "resources": {
       "../../../LICENSE-APACHE": "licenses/Apache-2.0.txt",
       "../../../LICENSE-MIT": "licenses/MIT.txt",
-      "../../../THIRD_PARTY_NOTICES.md": "licenses/THIRD_PARTY_NOTICES.md"
+      "../../../THIRD_PARTY_NOTICES.md": "licenses/THIRD_PARTY_NOTICES.md",
+      "locales/en.lproj/InfoPlist.strings": "en.lproj/InfoPlist.strings",
+      "locales/ru.lproj/InfoPlist.strings": "ru.lproj/InfoPlist.strings"
     },
     "macOS": {
       "entitlements": "Entitlements.plist"

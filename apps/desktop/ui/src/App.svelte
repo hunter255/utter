@@ -8,6 +8,7 @@
   import { modelStore } from './lib/model-store'
   import { noticeStore } from './lib/notices'
   import { t } from './lib/i18n'
+  import { broadcastLocalePreference } from './lib/locale-sync'
   import {
     SETTINGS_NAV,
     resolveSettingsSection,
@@ -95,6 +96,7 @@
         api.platformCapabilities(),
         modelStore.start(),
       ])
+      void broadcastLocalePreference(loaded.general.language ?? 'system')
       capabilities = loadedCapabilities
       showOnboarding = !localStorage.getItem(ONBOARDED_KEY) && isDefaultSettings(loaded)
     } catch (err) {
