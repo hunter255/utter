@@ -217,7 +217,7 @@ fn open_settings(app: &AppHandle) {
     }
 }
 
-fn quit(app: &AppHandle) {
+pub(crate) fn quit(app: &AppHandle) {
     let state = app.state::<AppState>();
     crate::runtime_boot::shutdown(&state);
     app.exit(0);

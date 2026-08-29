@@ -12,6 +12,8 @@ mod hud_position;
 mod logging;
 #[cfg(target_os = "macos")]
 mod macos_hotkeys;
+#[cfg(target_os = "macos")]
+mod macos_menu;
 mod permissions;
 mod platform;
 /// Maps each language profile's hotkey binding to its own lazily-built
@@ -118,7 +120,14 @@ pub fn run() -> Result<(), String> {
                 .build(),
         );
     #[cfg(target_os = "macos")]
-    let builder = builder.plugin(macos_hotkeys::plugin());
+    let builder = builder
+        .plugin(macos_hotkeys::plugin())
+        .menu(macos_menu::build)
+        .on_menu_event(|app, event| {
+            if macos_menu::is_quit(event.id().as_ref()) {
+                tray::quit(app);
+            }
+        });
     #[cfg(feature = "updater")]
     let builder = {
         let public_key = option_env!("UTTER_UPDATER_PUBLIC_KEY")
@@ -186,10 +195,10 @@ pub fn run() -> Result<(), String> {
         })
         .on_window_event(|window, event| {
             // Closing either window hides it to the tray rather than
-            // quitting the app; the only way to fully exit is the tray's
-            // "Quit" item, which shuts the runtime down explicitly. The HUD
-            // has no decorations/close button so it is never *user*-closable
-            // this way, but guarding it too is cheap and keeps both windows
+            // quitting the app; the tray's "Quit" item and macOS Command-Q
+            // both shut the runtime down explicitly. The HUD has no
+            // decorations/close button so it is never *user*-closable this
+            // way, but guarding it too is cheap and keeps both windows
             // symmetric against any programmatic or platform-triggered close
             // request.
             let label = window.label();
