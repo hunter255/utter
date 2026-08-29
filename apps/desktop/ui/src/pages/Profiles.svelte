@@ -11,6 +11,7 @@
   import TextInput from '../lib/components/TextInput.svelte'
   import Toggle from '../lib/components/Toggle.svelte'
   import { chordsConflict, hasBaseKey, parseChordTokens } from '../lib/hotkey'
+  import { t } from '../lib/i18n'
   import { modelStore } from '../lib/model-store'
   import { modelLanguageWarning, previewModelOptions, transcriptionModelOptions } from '../lib/models'
   import {
@@ -48,24 +49,26 @@
   let expandedIndex = $state(0)
   let refineKeyConfigured = $state(false)
 
-  const SOURCE_OPTIONS: { value: ProfileSource; label: string }[] = [
-    { value: 'local', label: 'Local — private and offline' },
-    { value: 'cloud', label: 'Cloud — OpenAI-compatible' },
-  ]
+  let sourceOptions = $derived<{ value: ProfileSource; label: string }[]>([
+    { value: 'local', label: $t('profiles.source.local') },
+    { value: 'cloud', label: $t('profiles.source.cloud') },
+  ])
 
-  const TONE_OPTIONS: { value: Tone; label: string }[] = [
-    { value: 'verbatim', label: 'Verbatim (no changes)' },
-    { value: 'clean', label: 'Clean (punctuation, casing)' },
-    { value: 'formal', label: 'Formal' },
-    { value: 'notes', label: 'Notes (terse, bulleted)' },
-    { value: 'code_comment', label: 'Code comment' },
-  ]
+  let toneOptions = $derived<{ value: Tone; label: string }[]>([
+    { value: 'verbatim', label: $t('profiles.tone.verbatim') },
+    { value: 'clean', label: $t('profiles.tone.clean') },
+    { value: 'formal', label: $t('profiles.tone.formal') },
+    { value: 'notes', label: $t('profiles.tone.notes') },
+    { value: 'code_comment', label: $t('profiles.tone.codeComment') },
+  ])
 
-  const RECOGNITION_PROMPT_OPTIONS: { value: RecognitionPromptMode; label: string }[] = [
-    { value: 'recommended', label: 'Recommended for model' },
-    { value: 'disabled', label: 'Off' },
-    { value: 'custom', label: 'Custom' },
-  ]
+  let recognitionPromptOptions = $derived<
+    { value: RecognitionPromptMode; label: string }[]
+  >([
+    { value: 'recommended', label: $t('profiles.recognition.recommended') },
+    { value: 'disabled', label: $t('profiles.recognition.disabled') },
+    { value: 'custom', label: $t('profiles.recognition.custom') },
+  ])
 
   const CLOUD_MODEL_PRESETS = [
     { value: 'gpt-4o-mini-transcribe', label: 'GPT-4o mini' },
@@ -74,10 +77,10 @@
   ]
 
   let localModelOptions = $derived([
-    { value: '', label: 'Choose a local model…' },
-    ...transcriptionModelOptions(models),
+    { value: '', label: $t('profiles.chooseLocalModel') },
+    ...transcriptionModelOptions(models, $t),
   ])
-  let previewOptions = $derived(previewModelOptions(models))
+  let previewOptions = $derived(previewModelOptions(models, $t))
 
   // The UI uses the same chord rules as the Rust hotkey registry. Invalid
   // chords do not participate in conflict detection because the backend
@@ -139,11 +142,11 @@
   }
 
   function activeLanguageWarning(profile: LanguageProfile): string | null {
-    return modelLanguageWarning(finalModel(profile, models), profile.language)
+    return modelLanguageWarning(finalModel(profile, models), profile.language, $t)
   }
 
   function draftLanguageWarning(profile: LanguageProfile): string | null {
-    return modelLanguageWarning(previewModel(profile, models), profile.language)
+    return modelLanguageWarning(previewModel(profile, models), profile.language, $t)
   }
 
   function nextProfileId(): string {
@@ -181,24 +184,24 @@
 
   function refinementConnectionState(): { ready: boolean; label: string } {
     if (!settings.refine.enabled) {
-      return { ready: false, label: 'Refinement is paused globally' }
+      return { ready: false, label: $t('profiles.refinementPaused') }
     }
     const localProvider = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test(
       settings.refine.base_url,
     )
     return localProvider || refineKeyConfigured
-      ? { ready: true, label: 'Connection is ready' }
-      : { ready: false, label: 'Connection needs setup' }
+      ? { ready: true, label: $t('profiles.connectionReady') }
+      : { ready: false, label: $t('profiles.connectionNeedsSetup') }
   }
 </script>
 
 <header class="page-heading">
-  <h1>Language profiles</h1>
-  <p>One hotkey and one complete dictation setup for every language you use.</p>
+  <h1>{$t('profiles.title')}</h1>
+  <p>{$t('profiles.description')}</p>
 </header>
 
 {#if modelsError}
-  <p class="error">Model catalog unavailable: {modelsError}</p>
+  <p class="error">{$t('profiles.catalogUnavailable', { error: modelsError })}</p>
 {/if}
 
 <div class="profile-list">
@@ -210,18 +213,18 @@
       conflictsByIndex.has(index),
     )}
     <ProfileCard
-      title={profileTitle(profile, index)}
-      summary={profileSummary(profile, models)}
+      title={profileTitle(profile, index, $t)}
+      summary={profileSummary(profile, models, $t)}
       ready={readiness.ready}
       expanded={expandedIndex === index}
       onToggle={() => (expandedIndex = expandedIndex === index ? -1 : index)}
     >
       {#if !readiness.ready}
         <div class="setup-needed" role="status">
-          <strong>Finish setup</strong>
+          <strong>{$t('profiles.finishSetup')}</strong>
           <ul>
             {#each readiness.issues as issue (issue)}
-              <li>{issue}</li>
+              <li>{$t(issue)}</li>
             {/each}
           </ul>
         </div>
@@ -229,14 +232,14 @@
 
       <section class="group">
         <header class="group-heading">
-          <h2>Basics</h2>
-          <p>Choose the language and the key that starts this profile.</p>
+          <h2>{$t('profiles.group.basics')}</h2>
+          <p>{$t('profiles.group.basicsDescription')}</p>
         </header>
 
-        <Field label="Language" for="profile-{index}-language">
+        <Field label={$t('profiles.language')} for="profile-{index}-language">
           <Select
             id="profile-{index}-language"
-            options={profileLanguageOptions(profile, models)}
+            options={profileLanguageOptions(profile, models, $t)}
             bind:value={
               () => profile.language,
               (value) => updateProfile(index, { language: value })
@@ -245,11 +248,11 @@
         </Field>
 
         <Field
-          label="Hotkey"
+          label={$t('profiles.hotkey')}
           for="profile-{index}-hotkey"
           hint={requiresBaseKey
-            ? 'Press any base key, optionally with modifiers. `, Insert, and function keys are supported.'
-            : 'Press a key chord; modifier-only shortcuts are supported on this platform.'}
+            ? $t('profiles.hotkeyHint.macos')
+            : $t('profiles.hotkeyHint.other')}
         >
           <HotkeyPicker
             id="profile-{index}-hotkey"
@@ -262,26 +265,30 @@
           {#if invalidHotkeys[index]}
             <p class="warning">
               {requiresBaseKey
-                ? 'Add a letter, number, function key, Space, `, or Insert.'
-                : 'Choose a valid hotkey for this profile.'}
+                ? $t('profiles.hotkeyInvalid.macos')
+                : $t('profiles.hotkeyInvalid.other')}
             </p>
           {/if}
           {#if conflictsByIndex.has(index)}
-            <p class="warning">Already used by {conflictsByIndex.get(index)?.join(', ')}.</p>
+            <p class="warning">
+              {$t('profiles.hotkeyConflict', {
+                profiles: conflictsByIndex.get(index)?.join(', ') ?? '',
+              })}
+            </p>
           {/if}
         </Field>
       </section>
 
       <section class="group">
         <header class="group-heading">
-          <h2>Transcription</h2>
-          <p>The model that produces the final text inserted into the active app.</p>
+          <h2>{$t('profiles.group.transcription')}</h2>
+          <p>{$t('profiles.group.transcriptionDescription')}</p>
         </header>
 
-        <Field label="Source" for="profile-{index}-source">
+        <Field label={$t('profiles.source')} for="profile-{index}-source">
           <Select
             id="profile-{index}-source"
-            options={SOURCE_OPTIONS}
+            options={sourceOptions}
             bind:value={
               () => profileSource(profile),
               (value) => selectSource(index, profile, value as ProfileSource)
@@ -291,9 +298,9 @@
 
         {#if profileSource(profile) === 'local'}
           <Field
-            label="Model"
+            label={$t('profiles.model')}
             for="profile-{index}-local-model"
-            hint="Whisper and Sherpa models are shown together; choosing one selects its engine automatically."
+            hint={$t('profiles.modelHint')}
           >
             <Select
               id="profile-{index}-local-model"
@@ -312,7 +319,7 @@
             {/if}
           </Field>
         {:else}
-          <Field label="Base URL" for="profile-{index}-cloud-url">
+          <Field label={$t('profiles.baseUrl')} for="profile-{index}-cloud-url">
             <TextInput
               id="profile-{index}-cloud-url"
               type="url"
@@ -323,9 +330,9 @@
             />
           </Field>
           <Field
-            label="Cloud model"
+            label={$t('profiles.cloudModel')}
             for="profile-{index}-cloud-model"
-            hint="Choose a preset or enter any model supported by the endpoint."
+            hint={$t('profiles.cloudModelHint')}
           >
             <TextInput
               id="profile-{index}-cloud-model"
@@ -334,7 +341,7 @@
                 (value) => updateProfile(index, { engine: { cloud: { model: value } } })
               }
             />
-            <div class="model-presets" aria-label="Cloud model presets">
+            <div class="model-presets" aria-label={$t('profiles.cloudModelPresets')}>
               {#each CLOUD_MODEL_PRESETS as preset (preset.value)}
                 <button
                   type="button"
@@ -351,11 +358,11 @@
 
       <section class="group">
         <header class="group-heading">
-          <h2>Live preview</h2>
-          <p>Optional provisional text in the HUD while you speak. Final text still uses the model above.</p>
+          <h2>{$t('profiles.group.preview')}</h2>
+          <p>{$t('profiles.group.previewDescription')}</p>
         </header>
 
-        <Field label="Preview model" for="profile-{index}-preview">
+        <Field label={$t('profiles.previewModel')} for="profile-{index}-preview">
           <Select
             id="profile-{index}-preview"
             options={previewOptions}
@@ -376,11 +383,11 @@
 
       <section class="group">
         <header class="group-heading">
-          <h2>Refinement</h2>
-          <p>Optionally polish this profile’s final transcript with an LLM.</p>
+          <h2>{$t('profiles.group.refinement')}</h2>
+          <p>{$t('profiles.group.refinementDescription')}</p>
         </header>
 
-        <Field label="Refine transcript" for="profile-{index}-refine">
+        <Field label={$t('profiles.refineTranscript')} for="profile-{index}-refine">
           <Toggle
             id="profile-{index}-refine"
             bind:checked={
@@ -396,12 +403,12 @@
             class="connection-state"
           >
             <span>{refinementConnectionState().label}</span>
-            <a href="#connections">Open connection settings</a>
+            <a href="#connections">{$t('profiles.openConnections')}</a>
           </div>
-          <Field label="Tone" for="profile-{index}-tone">
+          <Field label={$t('profiles.tone')} for="profile-{index}-tone">
             <Select
               id="profile-{index}-tone"
-              options={TONE_OPTIONS}
+              options={toneOptions}
               bind:value={
                 () => profile.refine.tone,
                 (value) => updateProfile(index, { refine: { tone: value as Tone } })
@@ -409,9 +416,9 @@
             />
           </Field>
           <Field
-            label="Instructions"
+            label={$t('profiles.instructions')}
             for="profile-{index}-refine-instructions"
-            hint="Optional formatting or editing preferences; meaning and language are preserved."
+            hint={$t('profiles.instructionsHint')}
           >
             <textarea
               id="profile-{index}-refine-instructions"
@@ -426,12 +433,12 @@
       </section>
 
       <details class="advanced-settings">
-        <summary>Advanced profile settings</summary>
+        <summary>{$t('profiles.advanced')}</summary>
         <div class="advanced-body">
           <Field
-            label="Technical ID"
+            label={$t('profiles.technicalId')}
             for="profile-{index}-id"
-            hint="Used in config, history, and diagnostics. It does not need to match the language."
+            hint={$t('profiles.technicalIdHint')}
           >
             <TextInput
               id="profile-{index}-id"
@@ -443,9 +450,9 @@
           </Field>
 
           <Field
-            label="Custom language code"
+            label={$t('profiles.customLanguageCode')}
             for="profile-{index}-custom-language"
-            hint="BCP-47 code such as de, fr-CA, or uk. Leave blank for automatic detection."
+            hint={$t('profiles.customLanguageCodeHint')}
           >
             <TextInput
               id="profile-{index}-custom-language"
@@ -459,13 +466,13 @@
 
           {#if recognitionSettingsVisible(profile)}
             <Field
-              label="Recognition prompt"
+              label={$t('profiles.recognitionPrompt')}
               for="profile-{index}-recognition-prompt-mode"
-              hint="Guides recognition before the optional LLM refinement step."
+              hint={$t('profiles.recognitionPromptHint')}
             >
               <Select
                 id="profile-{index}-recognition-prompt-mode"
-                options={RECOGNITION_PROMPT_OPTIONS}
+                options={recognitionPromptOptions}
                 bind:value={
                   () => profile.recognition.prompt_mode,
                   (value) =>
@@ -477,9 +484,9 @@
             </Field>
             {#if profile.recognition.prompt_mode === 'custom'}
               <Field
-                label="Custom recognition prompt"
+                label={$t('profiles.customRecognitionPrompt')}
                 for="profile-{index}-recognition-prompt"
-                hint="Keep it concise: spellings, language mix, and punctuation examples work best."
+                hint={$t('profiles.customRecognitionPromptHint')}
               >
                 <textarea
                   id="profile-{index}-recognition-prompt"
@@ -501,9 +508,9 @@
           class="remove"
           onclick={() => removeProfile(index)}
           disabled={settings.profiles.length <= 1}
-          title={settings.profiles.length <= 1 ? 'At least one profile is required' : undefined}
+          title={settings.profiles.length <= 1 ? $t('profiles.atLeastOne') : undefined}
         >
-          Remove profile
+          {$t('profiles.remove')}
         </button>
       </div>
     </ProfileCard>
@@ -511,11 +518,11 @@
 </div>
 
 <Section
-  title="Add another language"
-  description="Create a separate hotkey, transcription model, preview, and refinement policy."
+  title={$t('profiles.add.title')}
+  description={$t('profiles.add.description')}
 >
   <div class="profile-actions">
-    <button type="button" class="primary" onclick={addProfile}>Add profile</button>
+    <button type="button" class="primary" onclick={addProfile}>{$t('profiles.add.action')}</button>
   </div>
 </Section>
 

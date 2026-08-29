@@ -69,7 +69,7 @@ describe('profile editor derivations', () => {
     profile.draft = { model: 'preview' }
 
     expect(profileReadiness(profile, MODELS, true).issues).toEqual([
-      'Download the transcription model',
+      'profiles.issue.downloadFinalModel',
     ])
     const readyModels = MODELS.map((candidate) =>
       candidate.id === 'giga' ? { ...candidate, installed: true, status: 'ready' as const } : candidate,

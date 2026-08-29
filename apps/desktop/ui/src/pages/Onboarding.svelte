@@ -8,7 +8,7 @@
   import Select from '../lib/components/Select.svelte'
   import * as api from '../lib/api'
   import { hasBaseKey, parseChordTokens } from '../lib/hotkey'
-  import { t, type MessageKey } from '../lib/i18n'
+  import { formatBytes, t, type MessageKey } from '../lib/i18n'
   import { modelStore } from '../lib/model-store'
   import {
     modelCapabilityLabel,
@@ -99,7 +99,7 @@
         : null,
   )
   let localModels = $derived(transcriptionModels(models))
-  let languagePickerOptions = $derived(transcriptionLanguageOptions(models))
+  let languagePickerOptions = $derived(transcriptionLanguageOptions(models, $t))
   let modelPickerOptions = $derived([
     {
       value: '',
@@ -108,13 +108,13 @@
           ? $t('onboarding.loadingModels')
           : $t('onboarding.chooseLocalModel'),
     },
-    ...transcriptionModelOptions(models),
+    ...transcriptionModelOptions(models, $t),
   ])
   let selectedModel = $derived(
     localModels.find((model) => model.id === profileModelId) ?? null,
   )
   let selectedModelInstalled = $derived(selectedModel?.installed ?? false)
-  let languageWarning = $derived(modelLanguageWarning(selectedModel, profileLanguage))
+  let languageWarning = $derived(modelLanguageWarning(selectedModel, profileLanguage, $t))
 
   function selectLanguage(language: string) {
     settingsStore.patch({
@@ -325,7 +325,8 @@
                 <span class="model-label">{selectedModel.label}</span>
                 <span class="model-size">
                   {selectedModel.engine === 'whisper' ? 'Whisper' : 'Sherpa-onnx'} ·
-                  {modelCapabilityLabel(selectedModel)} · {selectedModel.size_mb} MB
+                  {modelCapabilityLabel(selectedModel, $t)} ·
+                  {formatBytes(selectedModel.size_mb * 1024 ** 2)}
                 </span>
               </div>
             </div>
