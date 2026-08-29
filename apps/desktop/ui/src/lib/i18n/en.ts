@@ -263,6 +263,7 @@ export const en = {
   'connections.providerPreset': 'Provider preset',
   'connections.providerPresetHint': 'Fills in the base URL and a default model below.',
   'connections.choosePreset': 'Choose a preset…',
+  'connections.ollamaLocal': 'Ollama (local)',
   'connections.baseUrl': 'Base URL',
   'connections.model': 'Model',
   'connections.timeout': 'Timeout',

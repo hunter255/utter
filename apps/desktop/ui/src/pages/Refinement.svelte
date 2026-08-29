@@ -32,7 +32,10 @@
 
   let presetOptions = $derived([
     { value: '', label: $t('connections.choosePreset') },
-    ...Object.entries(PRESETS).map(([value, p]) => ({ value, label: p.label })),
+    ...Object.entries(PRESETS).map(([value, p]) => ({
+      value,
+      label: value === 'ollama' ? $t('connections.ollamaLocal') : p.label,
+    })),
   ])
 
   let selectedPreset = $state('')
