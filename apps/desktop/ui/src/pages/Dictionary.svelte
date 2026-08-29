@@ -2,6 +2,7 @@
   import Section from '../lib/components/Section.svelte'
   import Field from '../lib/components/Field.svelte'
   import TextInput from '../lib/components/TextInput.svelte'
+  import { t } from '../lib/i18n'
   import { settingsStore } from '../lib/stores'
 
   let settings = $derived($settingsStore!)
@@ -48,30 +49,40 @@
 </script>
 
 <Section
-  title="Terms"
-  description="Words and names hinted to the speech-to-text engine to improve recognition."
+  title={$t('vocabulary.terms.title')}
+  description={$t('vocabulary.terms.description')}
 >
   <ul class="chip-list">
     {#each settings.dictionary.terms as term, i (term + i)}
       <li class="chip">
         <span>{term}</span>
-        <button type="button" aria-label="Remove {term}" onclick={() => removeTerm(i)}>×</button>
+        <button
+          type="button"
+          aria-label={$t('vocabulary.removeTerm', { term })}
+          onclick={() => removeTerm(i)}
+        >×</button>
       </li>
     {/each}
   </ul>
   <form class="add-row" onsubmit={onAddTermSubmit}>
-    <TextInput placeholder="Add a term…" bind:value={() => newTerm, (v) => (newTerm = v)} />
-    <button type="submit" disabled={!newTerm.trim()}>Add</button>
+    <TextInput
+      placeholder={$t('vocabulary.addTerm')}
+      bind:value={() => newTerm, (v) => (newTerm = v)}
+    />
+    <button type="submit" disabled={!newTerm.trim()}>{$t('common.add')}</button>
   </form>
 </Section>
 
-<Section title="Replacements" description={'"heard X" is replaced with "write Y" before refinement.'}>
+<Section
+  title={$t('vocabulary.replacements.title')}
+  description={$t('vocabulary.replacements.description')}
+>
   {#if settings.dictionary.rules.length > 0}
     <table>
       <thead>
         <tr>
-          <th>Heard</th>
-          <th>Write</th>
+          <th>{$t('vocabulary.heard')}</th>
+          <th>{$t('vocabulary.write')}</th>
           <th></th>
         </tr>
       </thead>
@@ -81,7 +92,11 @@
             <td>{rule.heard}</td>
             <td>{rule.write}</td>
             <td>
-              <button type="button" aria-label="Remove rule" onclick={() => removeRule(i)}>Remove</button>
+              <button
+                type="button"
+                aria-label={$t('vocabulary.removeRule')}
+                onclick={() => removeRule(i)}
+              >{$t('common.remove')}</button>
             </td>
           </tr>
         {/each}
@@ -89,10 +104,18 @@
     </table>
   {/if}
   <form class="add-row" onsubmit={onAddRuleSubmit}>
-    <TextInput placeholder="Heard…" bind:value={() => newRuleHeard, (v) => (newRuleHeard = v)} />
+    <TextInput
+      placeholder={$t('vocabulary.heardPlaceholder')}
+      bind:value={() => newRuleHeard, (v) => (newRuleHeard = v)}
+    />
     <span class="arrow">→</span>
-    <TextInput placeholder="Write…" bind:value={() => newRuleWrite, (v) => (newRuleWrite = v)} />
-    <button type="submit" disabled={!newRuleHeard.trim() || !newRuleWrite.trim()}>Add</button>
+    <TextInput
+      placeholder={$t('vocabulary.writePlaceholder')}
+      bind:value={() => newRuleWrite, (v) => (newRuleWrite = v)}
+    />
+    <button type="submit" disabled={!newRuleHeard.trim() || !newRuleWrite.trim()}>
+      {$t('common.add')}
+    </button>
   </form>
 </Section>
 

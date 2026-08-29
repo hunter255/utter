@@ -1,6 +1,7 @@
 <script lang="ts">
   import Section from '../lib/components/Section.svelte'
   import TextInput from '../lib/components/TextInput.svelte'
+  import { t } from '../lib/i18n'
   import { settingsStore } from '../lib/stores'
 
   let settings = $derived($settingsStore!)
@@ -29,15 +30,15 @@
 </script>
 
 <Section
-  title="Voice commands"
-  description={'Say a trigger phrase verbatim and it is replaced by its stored body instead of being transcribed.'}
+  title={$t('vocabulary.commands.title')}
+  description={$t('vocabulary.commands.description')}
 >
   {#if settings.snippets.length > 0}
     <table>
       <thead>
         <tr>
-          <th>Trigger</th>
-          <th>Body</th>
+          <th>{$t('vocabulary.trigger')}</th>
+          <th>{$t('vocabulary.body')}</th>
           <th></th>
         </tr>
       </thead>
@@ -47,8 +48,12 @@
             <td>{snippet.trigger}</td>
             <td class="body-cell">{snippet.body}</td>
             <td>
-              <button type="button" aria-label="Remove snippet" onclick={() => removeSnippet(i)}>
-                Remove
+              <button
+                type="button"
+                aria-label={$t('vocabulary.removeSnippet')}
+                onclick={() => removeSnippet(i)}
+              >
+                {$t('common.remove')}
               </button>
             </td>
           </tr>
@@ -57,10 +62,18 @@
     </table>
   {/if}
   <form class="add-row" onsubmit={onSubmit}>
-    <TextInput placeholder="Trigger phrase…" bind:value={() => newTrigger, (v) => (newTrigger = v)} />
+    <TextInput
+      placeholder={$t('vocabulary.triggerPlaceholder')}
+      bind:value={() => newTrigger, (v) => (newTrigger = v)}
+    />
     <span class="arrow">→</span>
-    <TextInput placeholder="Body text…" bind:value={() => newBody, (v) => (newBody = v)} />
-    <button type="submit" disabled={!newTrigger.trim() || !newBody.trim()}>Add</button>
+    <TextInput
+      placeholder={$t('vocabulary.bodyPlaceholder')}
+      bind:value={() => newBody, (v) => (newBody = v)}
+    />
+    <button type="submit" disabled={!newTrigger.trim() || !newBody.trim()}>
+      {$t('common.add')}
+    </button>
   </form>
 </Section>
 

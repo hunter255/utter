@@ -240,7 +240,8 @@ export const en = {
   'history.disabledHint':
     "History recording is off — new dictations won't be saved, but existing entries below are still searchable and can be reviewed or deleted.",
   'history.search': 'Search history…',
-  'history.clearConfirm': 'Clear all {count} entries?',
+  'history.clearConfirm.one': 'Clear all 1 entry?',
+  'history.clearConfirm.other': 'Clear all {count} entries?',
   'history.clearAll': 'Clear all',
   'history.empty': 'No history entries yet.',
   'history.emptySearch': 'No history entries match your search.',

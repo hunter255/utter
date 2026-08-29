@@ -6,6 +6,7 @@
   import TextInput from '../lib/components/TextInput.svelte'
   import Toggle from '../lib/components/Toggle.svelte'
   import * as api from '../lib/api'
+  import { formatDateTime, formatDuration, t } from '../lib/i18n'
   import { settingsStore } from '../lib/stores'
   import type { HistoryEntry } from '../lib/types'
 
@@ -34,10 +35,6 @@
     searchDebounce = setTimeout(refresh, 250)
   }
 
-  function formatDate(unixSeconds: number): string {
-    return new Date(unixSeconds * 1000).toLocaleString()
-  }
-
   async function copy(entry: HistoryEntry) {
     try {
       await navigator.clipboard.writeText(entry.final_text)
@@ -63,8 +60,8 @@
   }
 </script>
 
-<Section title="History" description="Past dictations, searchable by their final text.">
-  <Field label="Record history" for="history-enabled">
+<Section title={$t('history.title')} description={$t('history.description')}>
+  <Field label={$t('history.record')} for="history-enabled">
     <Toggle
       id="history-enabled"
       bind:checked={
@@ -75,15 +72,12 @@
   </Field>
 
   {#if !settings.history.enabled}
-    <p class="note">
-      History recording is off — new dictations won't be saved, but existing entries below are
-      still searchable and can be reviewed or deleted.
-    </p>
+    <p class="note">{$t('history.disabledHint')}</p>
   {/if}
 
   <div class="toolbar">
     <TextInput
-      placeholder="Search history…"
+      placeholder={$t('history.search')}
       bind:value={
         () => query,
         (v) => {
@@ -95,12 +89,17 @@
     {#if entries.length > 0}
       {#if confirmingClear}
         <span class="confirm">
-          Clear all {entries.length} entries?
-          <button type="button" class="danger" onclick={clearAll}>Confirm</button>
-          <button type="button" onclick={() => (confirmingClear = false)}>Cancel</button>
+          {$t(
+            entries.length === 1
+              ? 'history.clearConfirm.one'
+              : 'history.clearConfirm.other',
+            { count: entries.length },
+          )}
+          <button type="button" class="danger" onclick={clearAll}>{$t('common.confirm')}</button>
+          <button type="button" onclick={() => (confirmingClear = false)}>{$t('common.cancel')}</button>
         </span>
       {:else}
-        <button type="button" onclick={() => (confirmingClear = true)}>Clear all</button>
+        <button type="button" onclick={() => (confirmingClear = true)}>{$t('history.clearAll')}</button>
       {/if}
     {/if}
   </div>
@@ -108,23 +107,25 @@
   {#if loadError}
     <p class="error">{loadError}</p>
   {:else if entries.length === 0}
-    <p class="note">No history entries{query ? ' match your search' : ' yet'}.</p>
+    <p class="note">{$t(query ? 'history.emptySearch' : 'history.empty')}</p>
   {:else}
     <ul class="entries">
       {#each entries as entry (entry.id)}
         <li>
           <div class="entry-text">{entry.final_text}</div>
           <div class="entry-meta">
-            <span>{formatDate(entry.created_at)}</span>
+            <span>{formatDateTime(entry.created_at * 1000)}</span>
             <span>{entry.engine}</span>
             {#if entry.app}<span>{entry.app}</span>{/if}
-            <span>{(entry.duration_ms / 1000).toFixed(1)}s</span>
+            <span>{formatDuration(entry.duration_ms)}</span>
           </div>
           <div class="entry-actions">
             <button type="button" onclick={() => copy(entry)}>
-              {copiedId === entry.id ? 'Copied' : 'Copy'}
+              {copiedId === entry.id ? $t('common.copied') : $t('common.copy')}
             </button>
-            <button type="button" class="danger" onclick={() => remove(entry.id)}>Delete</button>
+            <button type="button" class="danger" onclick={() => remove(entry.id)}>
+              {$t('common.delete')}
+            </button>
           </div>
         </li>
       {/each}
