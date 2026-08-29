@@ -9,7 +9,13 @@
   import Slider from '../lib/components/Slider.svelte'
   import TextInput from '../lib/components/TextInput.svelte'
   import Toggle from '../lib/components/Toggle.svelte'
-  import { formatPercent, t, type MessageKey } from '../lib/i18n'
+  import {
+    formatPercent,
+    normalizeLocalePreference,
+    t,
+    type MessageKey,
+  } from '../lib/i18n'
+  import { broadcastLocalePreference, type UiLocalePreference } from '../lib/locale-sync'
   import { settingsStore } from '../lib/stores'
   import type {
     DictationMode,
@@ -37,6 +43,13 @@
     { value: 'light', label: $t('settings.theme.light') },
     { value: 'dark', label: $t('settings.theme.dark') },
   ])
+
+  let languageOptions = $derived<{ value: UiLocalePreference; label: string }[]>([
+    { value: 'system', label: $t('settings.language.system') },
+    { value: 'en', label: $t('settings.language.english') },
+    { value: 'ru', label: $t('settings.language.russian') },
+  ])
+  let uiLanguage = $derived(normalizeLocalePreference(settings.general.language))
 
   let modeOptions = $derived<{ value: DictationMode; label: string }[]>([
     { value: 'push_to_talk', label: $t('settings.recordingMode.pushToTalk') },
@@ -117,6 +130,14 @@
     settingsStore.patch({
       dictation: { silence_timeout_secs: enabled ? Number(timeoutValue) || 30 : null },
     })
+  }
+
+  function setUiLanguage(value: string) {
+    const preference = normalizeLocalePreference(value)
+    settingsStore.patch({
+      general: { language: preference === 'system' ? null : preference },
+    })
+    void broadcastLocalePreference(preference)
   }
 
   function setTimeoutValue(raw: string) {
@@ -279,6 +300,18 @@
         () => settings.general.theme,
         (value) => settingsStore.patch({ general: { theme: value as Theme } })
       }
+    />
+  </Field>
+
+  <Field
+    label={$t('settings.language')}
+    for="interface-language"
+    hint={$t('settings.languageHint')}
+  >
+    <Select
+      id="interface-language"
+      options={languageOptions}
+      bind:value={() => uiLanguage, setUiLanguage}
     />
   </Field>
 

@@ -1,6 +1,7 @@
 import { derived, get, writable, type Readable } from 'svelte/store'
 
 import { en, type MessageKey } from './en'
+import { ru } from './ru'
 
 export const SUPPORTED_LOCALES = ['en', 'ru'] as const
 export type Locale = (typeof SUPPORTED_LOCALES)[number]
@@ -10,7 +11,7 @@ export type MessageValues = Record<string, MessageValue>
 export type Translator = (key: MessageKey, values?: MessageValues) => string
 export type Catalog = Partial<Record<MessageKey, string>>
 
-const catalogs: Record<Locale, Catalog> = { en, ru: {} }
+const catalogs: Record<Locale, Catalog> = { en, ru }
 const localeState = writable<Locale>('en')
 
 export const locale: Readable<Locale> = { subscribe: localeState.subscribe }
@@ -22,6 +23,12 @@ function languageRoot(value: string): string {
 function supportedLocale(value: string): Locale | null {
   const root = languageRoot(value)
   return SUPPORTED_LOCALES.includes(root as Locale) ? (root as Locale) : null
+}
+
+/** Normalizes stored/config values without letting an old unknown value break startup. */
+export function normalizeLocalePreference(value: unknown): Locale | 'system' {
+  if (typeof value !== 'string' || value === 'system') return 'system'
+  return supportedLocale(value) ?? 'system'
 }
 
 /** Resolves an explicit preference, or the first supported system language. */
@@ -49,7 +56,7 @@ export function translate(
   values: MessageValues = {},
   activeLocale: Locale = 'en',
 ): string {
-  const template = catalogs[activeLocale][key]
+  const template = catalogs[activeLocale]?.[key]
     ?? (en as Record<string, string>)[key]
     ?? key
   return interpolate(template, values)

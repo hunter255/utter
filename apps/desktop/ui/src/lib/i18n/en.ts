@@ -281,6 +281,11 @@ export const en = {
   'settings.theme.system': 'Match system',
   'settings.theme.light': 'Light',
   'settings.theme.dark': 'Dark',
+  'settings.language': 'Interface language',
+  'settings.languageHint': 'Changes only the interface; dictation languages stay in Profiles.',
+  'settings.language.system': 'System language',
+  'settings.language.english': 'English',
+  'settings.language.russian': 'Русский',
   'settings.launchAtLogin': 'Launch at login',
   'settings.recording.title': 'Recording & microphone',
   'settings.recording.description':

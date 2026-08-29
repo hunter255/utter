@@ -27,6 +27,8 @@ export type InjectionPreference = 'auto' | 'clipboard_paste' | 'type' | 'clipboa
 
 /** `crates/utter-store/src/settings.rs::General` */
 export interface General {
+  /** `null` follows the OS. The UI recognizes `en`/`ru` and safely treats
+   * unknown values from a newer or legacy config as the system preference. */
   language: string | null
   theme: Theme
   autostart: boolean

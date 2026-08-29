@@ -295,6 +295,25 @@ mod tests {
             config["bundle"]["resources"]["../../../LICENSE-APACHE"],
             "licenses/Apache-2.0.txt"
         );
+        assert_eq!(
+            config["bundle"]["resources"]["locales/en.lproj/InfoPlist.strings"],
+            "en.lproj/InfoPlist.strings"
+        );
+        assert_eq!(
+            config["bundle"]["resources"]["locales/ru.lproj/InfoPlist.strings"],
+            "ru.lproj/InfoPlist.strings"
+        );
+    }
+
+    #[test]
+    fn macos_bundle_declares_and_supplies_both_interface_languages() {
+        let plist = include_str!("../Info.plist");
+        assert!(plist.contains("<string>en</string>"));
+        assert!(plist.contains("<string>ru</string>"));
+        assert!(include_str!("../locales/en.lproj/InfoPlist.strings")
+            .contains("NSMicrophoneUsageDescription"));
+        assert!(include_str!("../locales/ru.lproj/InfoPlist.strings")
+            .contains("NSMicrophoneUsageDescription"));
     }
 
     /// The menu-bearing status item is built in `tray::build`. A declarative

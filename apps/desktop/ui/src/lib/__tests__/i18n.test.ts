@@ -9,11 +9,18 @@ import {
   formatNumber,
   formatPercent,
   locale,
+  normalizeLocalePreference,
   resolveLocale,
   setLocale,
   translate,
   type MessageKey,
 } from '../i18n'
+import { en } from '../i18n/en'
+import { ru } from '../i18n/ru'
+
+function placeholders(message: string): string[] {
+  return [...message.matchAll(/\{([A-Za-z0-9_]+)\}/g)].map((match) => match[1]).sort()
+}
 
 describe('i18n foundation', () => {
   it('resolves explicit and system locale preferences safely', () => {
@@ -22,13 +29,25 @@ describe('i18n foundation', () => {
     expect(resolveLocale('system', ['de-DE', 'ru-RU', 'en-US'])).toBe('ru')
     expect(resolveLocale(null, ['de-DE', 'en-US'])).toBe('en')
     expect(resolveLocale('de-DE', ['ru-RU'])).toBe('en')
+    expect(resolveLocale('en', ['ru-RU'])).toBe('en')
+    expect(normalizeLocalePreference('ru-RU')).toBe('ru')
+    expect(normalizeLocalePreference('de-DE')).toBe('system')
+    expect(normalizeLocalePreference(null)).toBe('system')
   })
 
-  it('falls back to English, interpolates values, and preserves unknown runtime keys', () => {
-    const russianFallback = createTranslator('ru')
-    expect(russianFallback('model.downloadingPercent', { percent: 42 })).toBe('Downloading 42%')
+  it('translates Russian, falls back to English safely, and interpolates values', () => {
+    const russian = createTranslator('ru')
+    expect(russian('model.downloadingPercent', { percent: 42 })).toBe('Загрузка: 42%')
     expect(translate('app.windowTitle', { section: 'Models' }, 'en')).toBe('Models — Utter')
+    expect(translate('common.cancel', {}, 'de' as never)).toBe('Cancel')
     expect(translate('not.in.catalog' as MessageKey)).toBe('not.in.catalog')
+  })
+
+  it('keeps the Russian catalog complete and preserves every interpolation argument', () => {
+    expect(Object.keys(ru).sort()).toEqual(Object.keys(en).sort())
+    for (const key of Object.keys(en) as MessageKey[]) {
+      expect(placeholders(ru[key]), key).toEqual(placeholders(en[key]))
+    }
   })
 
   it('updates subscribers and document language metadata together', () => {
