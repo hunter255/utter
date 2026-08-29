@@ -161,21 +161,28 @@
         </section>
       {/each}
     </nav>
-    <main>
-      {#if hash === 'profiles'}
-        <Profiles {capabilities} />
-      {:else if hash === 'models'}
-        <Models />
-      {:else if hash === 'connections'}
-        <Connections />
-      {:else if hash === 'vocabulary'}
-        <Vocabulary />
-      {:else if hash === 'history'}
-        <History />
-      {:else if hash === 'settings'}
-        <Settings {capabilities} />
-      {/if}
-    </main>
+    <!-- Recreate the scroll owner with every route. A persistent <main>
+         inherits the previous page's scrollTop, so a shorter page can open
+         halfway down with its heading off-screen. -->
+    {#key hash}
+      <main>
+        <div class="page-content">
+          {#if hash === 'profiles'}
+            <Profiles {capabilities} />
+          {:else if hash === 'models'}
+            <Models />
+          {:else if hash === 'connections'}
+            <Connections />
+          {:else if hash === 'vocabulary'}
+            <Vocabulary />
+          {:else if hash === 'history'}
+            <History />
+          {:else if hash === 'settings'}
+            <Settings {capabilities} />
+          {/if}
+        </div>
+      </main>
+    {/key}
   </div>
 {/if}
 
@@ -204,7 +211,11 @@
   .shell {
     display: grid;
     grid-template-columns: 200px 1fr;
-    height: 100vh;
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
   }
 
   nav {
@@ -214,6 +225,10 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-4);
+    min-width: 0;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: hidden;
   }
 
   .brand {
@@ -270,11 +285,67 @@
   }
 
   main {
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    overflow-x: hidden;
     overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
     padding: var(--space-6);
+  }
+
+  .page-content {
+    width: 100%;
+    max-width: 960px;
+    margin: 0 auto;
     display: flex;
     flex-direction: column;
     gap: var(--space-4);
-    max-width: 760px;
+  }
+
+  @media (max-width: 720px) {
+    .shell {
+      grid-template-columns: 168px minmax(0, 1fr);
+    }
+
+    main {
+      padding: var(--space-4);
+    }
+  }
+
+  @media (max-width: 560px), (max-height: 480px) {
+    .shell {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    nav {
+      flex-direction: row;
+      align-items: center;
+      gap: var(--space-2);
+      padding: var(--space-2);
+      overflow-x: auto;
+      overflow-y: hidden;
+      border-right: 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .brand,
+    .nav-group {
+      flex: none;
+    }
+
+    .nav-group-label {
+      display: none;
+    }
+
+    ul {
+      flex-direction: row;
+    }
+
+    a {
+      white-space: nowrap;
+    }
   }
 </style>
