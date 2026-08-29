@@ -22,6 +22,9 @@ describe('settings navigation', () => {
     ['refinement', 'connections'],
     ['dictionary', 'vocabulary'],
     ['snippets', 'vocabulary'],
+    ['general', 'settings'],
+    ['dictation', 'settings'],
+    ['advanced', 'settings'],
   ])('redirects legacy #%s to #%s', (legacy, current) => {
     expect(resolveSettingsSection(legacy)).toBe(current)
   })
@@ -29,7 +32,7 @@ describe('settings navigation', () => {
   it('restores a valid last section only when no explicit hash exists', () => {
     expect(resolveSettingsSection('', 'models')).toBe('models')
     expect(resolveSettingsSection('', 'engines')).toBe('models')
-    expect(resolveSettingsSection('not-a-page', 'models')).toBe('general')
+    expect(resolveSettingsSection('not-a-page', 'models')).toBe('settings')
   })
 
   it('derives a useful native window title from the active destination', () => {
