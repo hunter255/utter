@@ -7,6 +7,7 @@
   import Select from '../lib/components/Select.svelte'
   import * as api from '../lib/api'
   import { hasBaseKey, parseChordTokens } from '../lib/hotkey'
+  import { modelStore } from '../lib/model-store'
   import {
     modelCapabilityLabel,
     modelLanguageWarning,
@@ -17,7 +18,6 @@
   import { settingsStore } from '../lib/stores'
   import type {
     EngineCfg,
-    ModelInfo,
     PermissionKind,
     PermissionReport,
     PermissionStatus,
@@ -65,12 +65,19 @@
   }
 
   // --- Step: model ---
-  let models = $state<ModelInfo[]>([])
-  let modelsError = $state('')
-  let progress = $state<Record<string, { done: number; total: number }>>({})
-  let activeDownloadId = $state<string | null>(null)
-  let cancellingDownload = $state(false)
-  let unlistenProgress: (() => void) | undefined
+  let models = $derived($modelStore.models)
+  let modelsError = $derived($modelStore.error)
+  let operation = $derived($modelStore.operation)
+  let pending = $derived($modelStore.pending)
+  let activeDownloadId = $derived(
+    operation?.kind === 'download'
+      ? operation.id
+      : pending?.kind === 'download'
+        ? pending.id
+        : null,
+  )
+  let cancellingDownload = $derived(operation?.phase === 'cancelling')
+  let operationBusy = $derived(operation !== null || pending !== null)
 
   // A fresh profile starts on sherpa, but onboarding is where users should be able to choose
   // either final-transcript engine. Streaming preview models stay out of this list because they
@@ -126,49 +133,18 @@
     })
   }
 
-  async function refreshModels() {
-    try {
-      models = await api.listModels()
-      modelsError = ''
-    } catch (err) {
-      modelsError = String(err)
-    }
-  }
-
   function progressPercent(id: string): number | null {
-    const p = progress[id]
+    const p = operation?.id === id ? operation : null
     if (!p || p.total <= 0) return null
     return Math.min(100, Math.round((p.done / p.total) * 100))
   }
 
   async function install(id: string) {
-    if (activeDownloadId) return
-    activeDownloadId = id
-    modelsError = ''
-    try {
-      const outcome = await api.downloadModel(id)
-      if (outcome === 'installed') await refreshModels()
-    } catch (err) {
-      modelsError = `Failed to download "${id}": ${String(err)}`
-    } finally {
-      activeDownloadId = null
-      cancellingDownload = false
-      const rest = { ...progress }
-      delete rest[id]
-      progress = rest
-    }
+    await modelStore.install(id)
   }
 
   async function cancelDownload(id: string) {
-    if (activeDownloadId !== id || cancellingDownload) return
-    cancellingDownload = true
-    modelsError = ''
-    try {
-      await api.cancelModelDownload(id)
-    } catch (err) {
-      cancellingDownload = false
-      modelsError = `Failed to cancel "${id}": ${String(err)}`
-    }
+    await modelStore.cancel(id)
   }
 
   // --- Step: permissions ---
@@ -223,12 +199,6 @@
   }
 
   onMount(() => {
-    void refreshModels()
-    api.onModelProgress((p) => {
-      progress = { ...progress, [p.id]: { done: p.done, total: p.total } }
-    }).then((fn) => {
-      unlistenProgress = fn
-    })
     getCurrentWindow().onFocusChanged(({ payload: focused }) => {
       if (focused && permissions?.platform === 'macos') void checkPermissions()
     }).then((fn) => {
@@ -237,7 +207,6 @@
   })
 
   onDestroy(() => {
-    unlistenProgress?.()
     unlistenFocus?.()
   })
 
@@ -331,7 +300,7 @@
         <Select
           id="onboarding-model"
           options={modelPickerOptions}
-          disabled={models.length === 0 || activeDownloadId !== null}
+          disabled={models.length === 0 || operationBusy}
           bind:value={
             () => (profileEngine === 'cloud' ? '' : (profileModelId ?? '')),
             selectModel
@@ -373,7 +342,7 @@
                 <button
                   type="button"
                   onclick={() => install(selectedModel.id)}
-                  disabled={activeDownloadId !== null}
+                  disabled={operationBusy}
                 >Install</button>
               {/if}
             </div>
@@ -519,16 +488,16 @@
 
     <div class="actions">
       {#if step > 0}
-        <button type="button" onclick={back} disabled={activeDownloadId !== null}>Back</button>
+        <button type="button" onclick={back} disabled={operationBusy}>Back</button>
       {/if}
       <div class="spacer"></div>
       {#if step < STEPS.length - 1}
-        <button type="button" class="ghost" onclick={onDone} disabled={activeDownloadId !== null}>Skip setup</button>
+        <button type="button" class="ghost" onclick={onDone} disabled={operationBusy}>Skip setup</button>
         <button
           type="button"
           class="primary"
           onclick={next}
-          disabled={activeDownloadId !== null || (step === 3 && !hotkeyValid)}
+          disabled={operationBusy || (step === 3 && !hotkeyValid)}
         >
           Continue
         </button>

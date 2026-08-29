@@ -46,6 +46,11 @@ describe('api command wrappers', () => {
     expect(mockInvoke).toHaveBeenCalledWith('list_models')
   })
 
+  it('modelOperationState -> model_operation_state', async () => {
+    await api.modelOperationState()
+    expect(mockInvoke).toHaveBeenCalledWith('model_operation_state')
+  })
+
   it('downloadModel -> download_model with an `id` key', async () => {
     await api.downloadModel('small')
     expect(mockInvoke).toHaveBeenCalledWith('download_model', { id: 'small' })
@@ -139,13 +144,24 @@ describe('api command wrappers', () => {
     expect(mockInvoke).toHaveBeenCalledWith('cancel_dictation')
   })
 
-  it('onModelProgress listens on "model-progress" and unwraps the payload', async () => {
+  it('onModelOperation listens on "model-operation" and unwraps the snapshot', async () => {
     const handler = vi.fn()
-    await api.onModelProgress(handler)
-    expect(mockListen).toHaveBeenCalledWith('model-progress', expect.any(Function))
+    await api.onModelOperation(handler)
+    expect(mockListen).toHaveBeenCalledWith('model-operation', expect.any(Function))
     const listenerCallback = mockListen.mock.calls[0][1] as (event: { payload: unknown }) => void
-    listenerCallback({ payload: { id: 'small', done: 1, total: 2 } })
-    expect(handler).toHaveBeenCalledWith({ id: 'small', done: 1, total: 2 })
+    const snapshot = {
+      generation: 1,
+      operation: {
+        generation: 1,
+        id: 'small',
+        kind: 'download',
+        phase: 'downloading',
+        done: 1,
+        total: 2,
+      },
+    }
+    listenerCallback({ payload: snapshot })
+    expect(handler).toHaveBeenCalledWith(snapshot)
   })
 
   it('onUpdateProgress listens on "update-progress" and unwraps the payload', async () => {

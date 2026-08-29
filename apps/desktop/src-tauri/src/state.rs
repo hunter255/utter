@@ -9,7 +9,9 @@ use anyhow::{Context, Result};
 
 use utter_store::{DownloadCancellation, HistoryRepo, ModelManager, Settings};
 
-use crate::events::Notice;
+use crate::events::{
+    ModelOperationKind, ModelOperationPhase, ModelOperationSnapshot, ModelOperationState, Notice,
+};
 use crate::runtime::RuntimeHandle;
 use crate::sink::{parse_kind, NoticeThrottle};
 
@@ -70,12 +72,6 @@ impl PendingNotices {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ModelOperationKind {
-    Download,
-    Remove,
-}
-
 impl ModelOperationKind {
     fn present_participle(self) -> &'static str {
         match self {
@@ -87,9 +83,7 @@ impl ModelOperationKind {
 
 #[derive(Debug)]
 struct ActiveModelOperation {
-    generation: u64,
-    id: String,
-    kind: ModelOperationKind,
+    state: ModelOperationState,
     cancellation: Option<DownloadCancellation>,
 }
 
@@ -130,16 +124,25 @@ impl ModelOperations {
         if let Some(existing) = active.as_ref() {
             return Err(format!(
                 "model '{}' is already {}; wait for it to finish or cancel its download first",
-                existing.id,
-                existing.kind.present_participle()
+                existing.state.id,
+                existing.state.kind.present_participle()
             ));
         }
 
-        let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
+        let generation = self.next_generation.fetch_add(1, Ordering::Relaxed) + 1;
+        let phase = match kind {
+            ModelOperationKind::Download => ModelOperationPhase::Preparing,
+            ModelOperationKind::Remove => ModelOperationPhase::Removing,
+        };
         *active = Some(ActiveModelOperation {
-            generation,
-            id: id.to_string(),
-            kind,
+            state: ModelOperationState {
+                generation,
+                id: id.to_string(),
+                kind,
+                phase,
+                done: 0,
+                total: 0,
+            },
             cancellation,
         });
         Ok(ModelOperationLease {
@@ -151,19 +154,19 @@ impl ModelOperations {
     /// Requests cancellation of `id`. A download that completed between the
     /// UI click and this command is a successful no-op; a different active
     /// operation remains an explicit conflict.
-    pub(crate) fn cancel_download(&self, id: &str) -> Result<bool, String> {
-        let active = self
+    pub(crate) fn cancel_download(&self, id: &str) -> Result<Option<ModelOperationState>, String> {
+        let mut active = self
             .active
             .lock()
             .map_err(|_| "model operation lock poisoned".to_string())?;
-        let Some(operation) = active.as_ref() else {
-            return Ok(false);
+        let Some(operation) = active.as_mut() else {
+            return Ok(None);
         };
-        if operation.id != id {
+        if operation.state.id != id {
             return Err(format!(
                 "model '{}' is currently {}; cannot cancel download of '{}'",
-                operation.id,
-                operation.kind.present_participle(),
+                operation.state.id,
+                operation.state.kind.present_participle(),
                 id
             ));
         }
@@ -171,7 +174,20 @@ impl ModelOperations {
             return Err(format!("model '{}' is being removed, not downloaded", id));
         };
         cancellation.cancel();
-        Ok(true)
+        operation.state.phase = ModelOperationPhase::Cancelling;
+        Ok(Some(operation.state.clone()))
+    }
+
+    /// Returns the authoritative state for a newly opened or remounted UI.
+    pub(crate) fn snapshot(&self) -> Result<ModelOperationSnapshot, String> {
+        let active = self
+            .active
+            .lock()
+            .map_err(|_| "model operation lock poisoned".to_string())?;
+        Ok(ModelOperationSnapshot {
+            generation: self.next_generation.load(Ordering::Relaxed),
+            operation: active.as_ref().map(|operation| operation.state.clone()),
+        })
     }
 }
 
@@ -183,6 +199,39 @@ pub(crate) struct ModelOperationLease {
     generation: u64,
 }
 
+impl ModelOperationLease {
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Updates the operation snapshot on every network callback. Event
+    /// throttling happens separately, so a UI that reconnects between events
+    /// still receives the latest byte counts from `snapshot()`.
+    pub(crate) fn update_progress(
+        &self,
+        done: u64,
+        total: u64,
+    ) -> Result<Option<ModelOperationState>, String> {
+        let mut active = self
+            .owner
+            .active
+            .lock()
+            .map_err(|_| "model operation lock poisoned".to_string())?;
+        let Some(operation) = active.as_mut() else {
+            return Ok(None);
+        };
+        if operation.state.generation != self.generation {
+            return Ok(None);
+        }
+        if operation.state.phase != ModelOperationPhase::Cancelling {
+            operation.state.phase = ModelOperationPhase::Downloading;
+        }
+        operation.state.done = done;
+        operation.state.total = total;
+        Ok(Some(operation.state.clone()))
+    }
+}
+
 impl Drop for ModelOperationLease {
     fn drop(&mut self) {
         let mut active = self
@@ -192,7 +241,7 @@ impl Drop for ModelOperationLease {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if active
             .as_ref()
-            .is_some_and(|operation| operation.generation == self.generation)
+            .is_some_and(|operation| operation.state.generation == self.generation)
         {
             *active = None;
         }
@@ -376,9 +425,16 @@ mod tests {
         assert!(mismatch.contains("giga"));
         assert!(!cancellation.is_cancelled());
 
-        assert!(operations.cancel_download("giga").expect("cancel"));
+        let cancelling = operations
+            .cancel_download("giga")
+            .expect("cancel")
+            .expect("active operation");
+        assert_eq!(cancelling.phase, ModelOperationPhase::Cancelling);
         assert!(cancellation.is_cancelled());
-        assert!(operations.cancel_download("giga").expect("idempotent"));
+        assert!(operations
+            .cancel_download("giga")
+            .expect("idempotent")
+            .is_some());
     }
 
     #[test]
@@ -387,7 +443,85 @@ mod tests {
         let (lease, _) = operations.begin_download("small").expect("download");
         drop(lease);
 
-        assert!(!operations.cancel_download("small").expect("late cancel"));
+        assert!(operations
+            .cancel_download("small")
+            .expect("late cancel")
+            .is_none());
+    }
+
+    #[test]
+    fn model_operation_snapshot_tracks_progress_and_completion() {
+        let operations = Arc::new(ModelOperations::default());
+        assert_eq!(
+            operations.snapshot().expect("empty snapshot"),
+            ModelOperationSnapshot {
+                generation: 0,
+                operation: None,
+            }
+        );
+
+        let (lease, _) = operations.begin_download("giga").expect("download");
+        let preparing = operations
+            .snapshot()
+            .expect("preparing snapshot")
+            .operation
+            .expect("active operation");
+        assert_eq!(preparing.generation, 1);
+        assert_eq!(preparing.phase, ModelOperationPhase::Preparing);
+        assert_eq!((preparing.done, preparing.total), (0, 0));
+
+        lease
+            .update_progress(25, 100)
+            .expect("progress update")
+            .expect("active operation");
+        let downloading = operations
+            .snapshot()
+            .expect("progress snapshot")
+            .operation
+            .expect("active operation");
+        assert_eq!(downloading.phase, ModelOperationPhase::Downloading);
+        assert_eq!((downloading.done, downloading.total), (25, 100));
+
+        drop(lease);
+        assert_eq!(
+            operations.snapshot().expect("completed snapshot"),
+            ModelOperationSnapshot {
+                generation: 1,
+                operation: None,
+            }
+        );
+    }
+
+    #[test]
+    fn stale_lease_cannot_overwrite_a_new_operation() {
+        let operations = Arc::new(ModelOperations::default());
+        let (first, _) = operations.begin_download("first").expect("first");
+        let stale_generation = first.generation();
+        drop(first);
+
+        let (second, _) = operations.begin_download("second").expect("second");
+        assert!(second.generation() > stale_generation);
+
+        let stale = ModelOperationLease {
+            owner: Arc::clone(&operations),
+            generation: stale_generation,
+        };
+        assert!(stale
+            .update_progress(99, 100)
+            .expect("stale update")
+            .is_none());
+        let snapshot = operations
+            .snapshot()
+            .expect("snapshot")
+            .operation
+            .expect("second operation");
+        assert_eq!(snapshot.id, "second");
+        assert_eq!(snapshot.done, 0);
+
+        // Dropping the stale lease must not release the current one.
+        drop(stale);
+        assert!(operations.begin_remove("third").is_err());
+        drop(second);
     }
 
     #[test]

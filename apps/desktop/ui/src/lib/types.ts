@@ -326,11 +326,26 @@ export type UpdateProgressPayload =
   | { event: 'progress'; downloaded: number; total: number | null }
   | { event: 'finished' }
 
-/** Payload of the `model-progress` event (`src-tauri/src/events.rs::ModelProgress`). */
-export interface ModelProgressPayload {
+/** `src-tauri/src/events.rs::ModelOperationKind` */
+export type ModelOperationKind = 'download' | 'remove'
+
+/** `src-tauri/src/events.rs::ModelOperationPhase` */
+export type ModelOperationPhase = 'preparing' | 'downloading' | 'cancelling' | 'removing'
+
+/** The active model mutation (`src-tauri/src/events.rs::ModelOperationState`). */
+export interface ModelOperationState {
+  generation: number
   id: string
+  kind: ModelOperationKind
+  phase: ModelOperationPhase
   done: number
   total: number
+}
+
+/** Command/event snapshot. `operation` is null after this generation ended. */
+export interface ModelOperationSnapshot {
+  generation: number
+  operation: ModelOperationState | null
 }
 
 /** `src-tauri/src/events.rs::DictationPhase` */

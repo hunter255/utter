@@ -1,24 +1,47 @@
 //! Event payload shapes emitted to the UI over Tauri's event bus.
 //!
-//! Fixed here, once, so every emitter (this task's `download_model`, and the
-//! runtime orchestrator that lands in later tasks) shares the same wire
-//! shape rather than each defining its own ad hoc payload.
-//!
-//! Only [`ModelProgress`] (the `model-progress` event) is actually emitted
-//! by this task; [`DictationState`] (`dictation-state`) and [`Notice`]
-//! (`notice`) are defined ahead of time because their shape is part of this
-//! task's contract with the frontend, even though nothing emits them yet.
+//! Fixed here, once, so every emitter shares the same wire shape rather than
+//! each defining its own ad hoc payload.
 
 use serde::Serialize;
 
-/// Payload for the `model-progress` event, emitted while a model download is
-/// in flight: `done`/`total` are bytes received so far / expected (`total`
-/// is `0` if the server didn't report a `Content-Length`).
-#[derive(Debug, Clone, Serialize)]
-pub struct ModelProgress {
+/// The model-file mutation currently occupying the single operation slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelOperationKind {
+    Download,
+    Remove,
+}
+
+/// User-visible phase of a model-file mutation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelOperationPhase {
+    Preparing,
+    Downloading,
+    Cancelling,
+    Removing,
+}
+
+/// The active operation. `done`/`total` are bytes for downloads and remain
+/// zero for removal or while the server has not reported a content length.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ModelOperationState {
+    pub generation: u64,
     pub id: String,
+    pub kind: ModelOperationKind,
+    pub phase: ModelOperationPhase,
     pub done: u64,
     pub total: u64,
+}
+
+/// Snapshot returned by `model_operation_state` and emitted as
+/// `model-operation`. The generation is retained after completion so a late
+/// completion event can never clear a newer operation in the frontend.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ModelOperationSnapshot {
+    pub generation: u64,
+    pub operation: Option<ModelOperationState>,
 }
 
 /// The dictation pipeline's current phase, part of the `dictation-state`
