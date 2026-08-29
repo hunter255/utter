@@ -7,6 +7,7 @@
   import TextInput from '../lib/components/TextInput.svelte'
   import Toggle from '../lib/components/Toggle.svelte'
   import * as api from '../lib/api'
+  import { t } from '../lib/i18n'
   import { settingsStore } from '../lib/stores'
 
   let settings = $derived($settingsStore!)
@@ -29,10 +30,13 @@
     },
   }
 
-  const PRESET_OPTIONS = [
-    { value: '', label: 'Choose a preset…' },
-    ...Object.entries(PRESETS).map(([value, p]) => ({ value, label: p.label })),
-  ]
+  let presetOptions = $derived([
+    { value: '', label: $t('connections.choosePreset') },
+    ...Object.entries(PRESETS).map(([value, p]) => ({
+      value,
+      label: value === 'ollama' ? $t('connections.ollamaLocal') : p.label,
+    })),
+  ])
 
   let selectedPreset = $state('')
 
@@ -67,7 +71,7 @@
     try {
       await api.setApiKey('stt', sttApiKey)
     } catch (err) {
-      sttKeyError = `Failed to save API key: ${String(err)}`
+      sttKeyError = String(err)
       return
     }
     sttApiKey = ''
@@ -84,7 +88,7 @@
     try {
       await api.setApiKey('refine', refineApiKey)
     } catch (err) {
-      refineKeyError = `Failed to save API key: ${String(err)}`
+      refineKeyError = String(err)
       return
     }
     refineApiKey = ''
@@ -101,9 +105,9 @@
   // so it survives both page navigation (which unmounts/remounts this
   // component) and an app restart.
   const SAMPLE_TEXT_KEY = 'utter.refinement.sampleText'
-  const DEFAULT_SAMPLE_TEXT = 'hello world this is a test of the refinement pipeline'
-
-  let testSample = $state(localStorage.getItem(SAMPLE_TEXT_KEY) ?? DEFAULT_SAMPLE_TEXT)
+  let testSample = $state(
+    localStorage.getItem(SAMPLE_TEXT_KEY) ?? $t('connections.defaultSample'),
+  )
   let testResult = $state('')
   let testError = $state('')
   let testing = $state(false)
@@ -127,15 +131,15 @@
 </script>
 
 <header class="page-heading">
-  <h1>Connections</h1>
-  <p>Credentials and endpoints used by cloud transcription and optional transcript refinement.</p>
+  <h1>{$t('connections.title')}</h1>
+  <p>{$t('connections.description')}</p>
 </header>
 
 <Section
-  title="Cloud speech-to-text"
-  description="The shared credential for OpenAI-compatible transcription. Choose the endpoint and model inside each language profile."
+  title={$t('connections.cloud.title')}
+  description={$t('connections.cloud.description')}
 >
-  <Field label="API key" for="cloud-stt-key">
+  <Field label={$t('connections.apiKey')} for="cloud-stt-key">
     <div class="key-row">
       <TextInput
         id="cloud-stt-key"
@@ -143,29 +147,29 @@
         placeholder="sk-…"
         bind:value={() => sttApiKey, (value) => (sttApiKey = value)}
       />
-      <button type="button" onclick={saveSttKey} disabled={!sttApiKey.trim()}>Save</button>
+      <button type="button" onclick={saveSttKey} disabled={!sttApiKey.trim()}>{$t('common.save')}</button>
       {#if sttKeyJustSaved}
-        <span class="badge badge-installed">Saved</span>
+        <span class="badge badge-installed">{$t('common.saved')}</span>
       {:else if sttConfigured}
-        <span class="badge badge-installed">Configured</span>
+        <span class="badge badge-installed">{$t('common.configured')}</span>
       {:else}
-        <span class="badge badge-missing">Not set</span>
+        <span class="badge badge-missing">{$t('common.notSet')}</span>
       {/if}
     </div>
     {#if sttKeyError}
-      <p class="error">{sttKeyError}</p>
+      <p class="error">{$t('connections.keySaveFailed', { error: sttKeyError })}</p>
     {/if}
   </Field>
 </Section>
 
 <Section
-  title="Transcript refinement"
-  description="An OpenAI-compatible LLM connection. Each profile chooses whether to use it, its tone, and its instructions."
+  title={$t('connections.refinement.title')}
+  description={$t('connections.refinement.description')}
 >
   <Field
-    label="Pause all refinement"
+    label={$t('connections.pause')}
     for="refine-paused"
-    hint="Temporary global pause. Individual profile choices are preserved and resume when this is switched off."
+    hint={$t('connections.pauseHint')}
   >
     <Toggle
       id="refine-paused"
@@ -176,11 +180,15 @@
     />
   </Field>
 
-  <Field label="Provider preset" for="preset" hint="Fills in the base URL and a default model below.">
-    <Select id="preset" options={PRESET_OPTIONS} bind:value={() => selectedPreset, applyPreset} />
+  <Field
+    label={$t('connections.providerPreset')}
+    for="preset"
+    hint={$t('connections.providerPresetHint')}
+  >
+    <Select id="preset" options={presetOptions} bind:value={() => selectedPreset, applyPreset} />
   </Field>
 
-  <Field label="Base URL" for="refine-url">
+  <Field label={$t('connections.baseUrl')} for="refine-url">
     <TextInput
       id="refine-url"
       type="url"
@@ -191,7 +199,7 @@
     />
   </Field>
 
-  <Field label="Model" for="refine-model">
+  <Field label={$t('connections.model')} for="refine-model">
     <TextInput
       id="refine-model"
       bind:value={
@@ -201,7 +209,11 @@
     />
   </Field>
 
-  <Field label="Timeout" for="refine-timeout" hint="Seconds to wait for a response.">
+  <Field
+    label={$t('connections.timeout')}
+    for="refine-timeout"
+    hint={$t('connections.timeoutHint')}
+  >
     <TextInput
       id="refine-timeout"
       type="number"
@@ -214,7 +226,7 @@
     />
   </Field>
 
-  <Field label="API key" for="refine-key">
+  <Field label={$t('connections.apiKey')} for="refine-key">
     <div class="key-row">
       <TextInput
         id="refine-key"
@@ -222,31 +234,31 @@
         placeholder="sk-…"
         bind:value={() => refineApiKey, (v) => (refineApiKey = v)}
       />
-      <button type="button" onclick={saveRefineKey} disabled={!refineApiKey.trim()}>Save</button>
+      <button type="button" onclick={saveRefineKey} disabled={!refineApiKey.trim()}>{$t('common.save')}</button>
       {#if refineKeyJustSaved}
-        <span class="badge badge-installed">Saved</span>
+        <span class="badge badge-installed">{$t('common.saved')}</span>
       {:else if refineConfigured}
-        <span class="badge badge-installed">Configured</span>
+        <span class="badge badge-installed">{$t('common.configured')}</span>
       {:else}
-        <span class="badge badge-missing">Not set</span>
+        <span class="badge badge-missing">{$t('common.notSet')}</span>
       {/if}
     </div>
     {#if refineKeyError}
-      <p class="error">{refineKeyError}</p>
+      <p class="error">{$t('connections.keySaveFailed', { error: refineKeyError })}</p>
     {/if}
   </Field>
 </Section>
 
 <Section
-  title="Test refinement connection"
-  description="Send a sample transcript through the current LLM configuration."
+  title={$t('connections.test.title')}
+  description={$t('connections.test.description')}
 >
-  <Field label="Sample text" for="test-sample">
+  <Field label={$t('connections.sampleText')} for="test-sample">
     <textarea id="test-sample" bind:value={testSample} rows="3"></textarea>
   </Field>
   <div class="test-actions">
     <button type="button" onclick={runTest} disabled={testing || !testSample.trim()}>
-      {testing ? 'Testing…' : 'Test'}
+      {testing ? $t('common.testing') : $t('common.test')}
     </button>
   </div>
   {#if testResult}

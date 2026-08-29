@@ -1,5 +1,6 @@
 <script lang="ts">
   import Section from '../lib/components/Section.svelte'
+  import { formatBytes, t } from '../lib/i18n'
   import { modelStore } from '../lib/model-store'
   import { modelCapabilityLabel, previewModels } from '../lib/models'
 
@@ -48,11 +49,11 @@
 </script>
 
 <header class="page-heading">
-  <h1>Models</h1>
-  <p>Install and remove local transcription and live-preview resources.</p>
+  <h1>{$t('models.title')}</h1>
+  <p>{$t('models.description')}</p>
 </header>
 
-<Section title="Whisper models" description="Runs fully offline. Larger models are more accurate but slower. Which model a profile uses is set on the Profiles page.">
+<Section title={$t('models.whisper.title')} description={$t('models.whisper.description')}>
   {#if modelsError}
     <p class="error">{modelsError}</p>
   {/if}
@@ -62,29 +63,31 @@
         <div class="model-row">
           <div class="model-info">
             <span class="model-label">{model.label}</span>
-            <span class="model-size">{modelCapabilityLabel(model)} · {model.size_mb} MB</span>
+            <span class="model-size">
+              {modelCapabilityLabel(model, $t)} · {formatBytes(model.size_mb * 1024 ** 2)}
+            </span>
           </div>
           <div class="model-actions">
             {#if activeRemoveId === model.id}
-              <button type="button" disabled>Removing…</button>
+              <button type="button" disabled>{$t('model.removing')}</button>
             {:else if activeDownloadId === model.id}
               <button
                 type="button"
                 class="cancel"
                 onclick={() => cancelDownload(model.id)}
                 disabled={cancellingDownload}
-              >{cancellingDownload ? 'Cancelling…' : 'Cancel'}</button>
+              >{cancellingDownload ? $t('common.cancelling') : $t('common.cancel')}</button>
             {:else if model.status === 'ready'}
-              <span class="badge badge-installed">Installed</span>
+              <span class="badge badge-installed">{$t('common.installed')}</span>
               <button type="button" onclick={() => remove(model.id)} disabled={operationBusy}>
-                Remove
+                {$t('common.remove')}
               </button>
             {:else}
               {#if model.status === 'damaged'}
-                <span class="badge badge-damaged">Damaged</span>
+                <span class="badge badge-damaged">{$t('common.damaged')}</span>
               {/if}
               <button type="button" onclick={() => install(model.id)} disabled={operationBusy}>
-                {model.status === 'damaged' ? 'Re-download' : 'Install'}
+                {model.status === 'damaged' ? $t('common.reDownload') : $t('common.install')}
               </button>
             {/if}
           </div>
@@ -99,36 +102,38 @@
   </ul>
 </Section>
 
-<Section title="Sherpa-onnx models" description="Offline transducer models, one per language, that emit punctuation directly and bias recognition towards your dictionary terms.">
+<Section title={$t('models.sherpa.title')} description={$t('models.sherpa.description')}>
   <ul class="model-list">
     {#each sherpaModels as model (model.id)}
       <li>
         <div class="model-row">
           <div class="model-info">
             <span class="model-label">{model.label}</span>
-            <span class="model-size">{modelCapabilityLabel(model)} · {model.size_mb} MB</span>
+            <span class="model-size">
+              {modelCapabilityLabel(model, $t)} · {formatBytes(model.size_mb * 1024 ** 2)}
+            </span>
           </div>
           <div class="model-actions">
             {#if activeRemoveId === model.id}
-              <button type="button" disabled>Removing…</button>
+              <button type="button" disabled>{$t('model.removing')}</button>
             {:else if activeDownloadId === model.id}
               <button
                 type="button"
                 class="cancel"
                 onclick={() => cancelDownload(model.id)}
                 disabled={cancellingDownload}
-              >{cancellingDownload ? 'Cancelling…' : 'Cancel'}</button>
+              >{cancellingDownload ? $t('common.cancelling') : $t('common.cancel')}</button>
             {:else if model.status === 'ready'}
-              <span class="badge badge-installed">Installed</span>
+              <span class="badge badge-installed">{$t('common.installed')}</span>
               <button type="button" onclick={() => remove(model.id)} disabled={operationBusy}>
-                Remove
+                {$t('common.remove')}
               </button>
             {:else}
               {#if model.status === 'damaged'}
-                <span class="badge badge-damaged">Damaged</span>
+                <span class="badge badge-damaged">{$t('common.damaged')}</span>
               {/if}
               <button type="button" onclick={() => install(model.id)} disabled={operationBusy}>
-                {model.status === 'damaged' ? 'Re-download' : 'Install'}
+                {model.status === 'damaged' ? $t('common.reDownload') : $t('common.install')}
               </button>
             {/if}
           </div>
@@ -143,36 +148,38 @@
   </ul>
 </Section>
 
-<Section title="Live preview models" description="Streaming models show provisional words in the HUD while you speak. They trade size, latency, and accuracy differently and may omit punctuation; their text is never inserted. Choose one per profile on the Profiles page.">
+<Section title={$t('models.preview.title')} description={$t('models.preview.description')}>
   <ul class="model-list">
     {#each streamingModels as model (model.id)}
       <li>
         <div class="model-row">
           <div class="model-info">
             <span class="model-label">{model.label}</span>
-            <span class="model-size">{modelCapabilityLabel(model)} · {model.size_mb} MB</span>
+            <span class="model-size">
+              {modelCapabilityLabel(model, $t)} · {formatBytes(model.size_mb * 1024 ** 2)}
+            </span>
           </div>
           <div class="model-actions">
             {#if activeRemoveId === model.id}
-              <button type="button" disabled>Removing…</button>
+              <button type="button" disabled>{$t('model.removing')}</button>
             {:else if activeDownloadId === model.id}
               <button
                 type="button"
                 class="cancel"
                 onclick={() => cancelDownload(model.id)}
                 disabled={cancellingDownload}
-              >{cancellingDownload ? 'Cancelling…' : 'Cancel'}</button>
+              >{cancellingDownload ? $t('common.cancelling') : $t('common.cancel')}</button>
             {:else if model.status === 'ready'}
-              <span class="badge badge-installed">Installed</span>
+              <span class="badge badge-installed">{$t('common.installed')}</span>
               <button type="button" onclick={() => remove(model.id)} disabled={operationBusy}>
-                Remove
+                {$t('common.remove')}
               </button>
             {:else}
               {#if model.status === 'damaged'}
-                <span class="badge badge-damaged">Damaged</span>
+                <span class="badge badge-damaged">{$t('common.damaged')}</span>
               {/if}
               <button type="button" onclick={() => install(model.id)} disabled={operationBusy}>
-                {model.status === 'damaged' ? 'Re-download' : 'Install'}
+                {model.status === 'damaged' ? $t('common.reDownload') : $t('common.install')}
               </button>
             {/if}
           </div>

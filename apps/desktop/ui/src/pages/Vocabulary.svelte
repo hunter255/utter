@@ -1,11 +1,12 @@
 <script lang="ts">
+  import { t } from '../lib/i18n'
   import DictionaryPage from './Dictionary.svelte'
   import Snippets from './Snippets.svelte'
 </script>
 
 <header class="page-heading">
-  <h1>Vocabulary</h1>
-  <p>Teach recognition special words, correct recurring mistakes, and expand spoken commands.</p>
+  <h1>{$t('vocabulary.title')}</h1>
+  <p>{$t('vocabulary.description')}</p>
 </header>
 
 <DictionaryPage />
