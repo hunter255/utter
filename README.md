@@ -16,8 +16,8 @@ no network calls except the ones you configure yourself (a refinement
 endpoint, a model download).
 
 <p align="center">
-  <img src="docs/img/hero-light.png" alt="Utter settings window, General page, light theme" width="49%">
-  <img src="docs/img/hero-dark.png" alt="Utter settings window, General page, dark theme" width="49%">
+  <img src="docs/img/hero-light.png" alt="Utter Settings page, light theme" width="49%">
+  <img src="docs/img/hero-dark.png" alt="Utter Settings page, dark theme" width="49%">
 </p>
 
 ## Features
@@ -80,15 +80,15 @@ endpoint, a model download).
   Direct typing synthesizes individual key presses and so covers only what a
   US-QWERTY layout can reach; anything else (Cyrillic, CJK, emoji) falls
   through to clipboard-paste rather than being dropped.
-- **Tray and settings UI** — a quick refinement on/off toggle, a full
-  settings window (profiles, engines, refinement, dictionary, snippets,
-  history), and a first-run onboarding flow that walks through mic check,
-  model download, hotkey choice, and permissions. The General page's Launch
-  at login switch manages the operating system's startup registration and is
-  reconciled with the saved preference on every app start.
+- **Tray and settings UI** — a quick global refinement pause, a focused
+  settings window (profiles, models, vocabulary, connections, history, and
+  application settings), and a first-run onboarding flow that walks through
+  mic check, model download, hotkey choice, and permissions. The Appearance
+  section's Launch at login switch manages the operating system's startup
+  registration and is reconciled with the saved preference on every app start.
 - **Persistent diagnostics** — GUI launches keep a small bounded set of local
   log files, with credentials, URL queries and the personal home path
-  redacted before each line reaches disk. Advanced settings can open the log
+  redacted before each line reaches disk. Settings can open the log
   folder or copy an allowlisted report; nothing is uploaded automatically.
 
 ## Screenshots
@@ -112,10 +112,10 @@ hotkey selects the whole set at once.
 
 | | |
 |---|---|
-| ![Engines settings page listing sherpa-onnx models and live preview models with their install state](docs/img/settings-engines-light.png) | ![Refinement settings page with the provider connection, master switch, and a live test](docs/img/settings-refinement-light.png) |
-| **Engines** — download and remove whisper.cpp, sherpa-onnx and live preview models, and hold the cloud engine's API key; which of them a profile uses is set on the Profiles page. | **Refinement** — the LLM connection profiles can send transcripts through: any OpenAI-compatible chat endpoint, including a local Ollama, with a master switch and a live test. |
+| ![Models page listing sherpa-onnx models and live preview models with their install state](docs/img/settings-engines-light.png) | ![Connections page with provider configuration, the global pause, and a live test](docs/img/settings-refinement-light.png) |
+| **Models** — download and remove whisper.cpp, sherpa-onnx and live preview models; which one a profile uses is set on the Profiles page. | **Connections** — configure cloud transcription and send transcripts through any OpenAI-compatible refinement endpoint, including a local Ollama. |
 | ![Dictionary settings page with custom terms and heard/write replacement rules](docs/img/settings-dictionary-light.png) | ![Snippets settings page with trigger phrases and their expansion bodies](docs/img/settings-snippets-light.png) |
-| **Dictionary** — custom terms and literal replacement rules applied to every transcript. | **Snippets** — a spoken trigger expands to a stored template, bypassing refinement. |
+| **Vocabulary: terms and replacements** — teach Utter names and literal corrections applied to every transcript. | **Vocabulary: voice commands** — a spoken trigger expands to a stored template, bypassing refinement. |
 
 <p align="center">
   <img src="docs/img/settings-history-light.png" alt="History settings page listing past dictations with search, copy, and delete" width="70%">
@@ -270,8 +270,8 @@ rejected, so the format tolerates being hand-edited or partially upgraded.
   `[[profiles]].draft` table with a single `model` key names the streaming
   model that drives that profile's live preview; omitting it, or leaving
   `model` blank, is the default and means no preview.
-- **Engines** — models download to `~/.local/share/utter/models` and are
-  managed from the Engines page; which engine a profile actually uses is
+- **Models** — models download to `~/.local/share/utter/models` and are
+  managed from the Models page; which engine a profile actually uses is
   chosen on the Profiles page. Five of the catalog's entries are sherpa-onnx
   models, filed under two engine kinds: the offline models whose text is
   inserted (GigaAM-v3 for Russian, Parakeet TDT 110M for English) and the
@@ -281,7 +281,7 @@ rejected, so the format tolerates being hand-edited or partially upgraded.
   catalog entry declares its native family: transducers install
   encoder/decoder/joiner/tokens, while T-One installs model/tokens. The loader
   validates that family before opening any native model files.
-- **Refinement** — point `refine.base_url` / `refine.model` at any
+- **Connections** — point `refine.base_url` / `refine.model` at any
   OpenAI-compatible chat endpoint; the settings UI ships presets for OpenAI,
   Groq, OpenRouter, DeepSeek, and Ollama. For a fully local setup, run
   [Ollama](https://ollama.com) and use its default `http://localhost:11434/v1`
@@ -301,11 +301,12 @@ rejected, so the format tolerates being hand-edited or partially upgraded.
 - **Diagnostics** — logs live under the platform app-data directory in
   `logs/`, rotate at roughly 1 MiB each, and keep at most four files.
   Increasing `advanced.log_level` changes how much a future launch records.
-  The Advanced page can open the directory or copy a bounded report containing
+  The Settings page can open the directory or copy a bounded report containing
   only app/platform facts, model IDs, permission states and redacted log lines.
 - **Dictionary and snippets** — custom terms and replacement rules live
   under `[dictionary]`; snippets are a list of trigger/body pairs under
-  `[[snippets]]`. Both are editable from the settings UI.
+  `[[snippets]]`. Terms, replacements, and voice commands are editable together
+  on the Vocabulary page.
 
 ## Privacy
 

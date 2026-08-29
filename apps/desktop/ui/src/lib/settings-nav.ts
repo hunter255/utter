@@ -1,12 +1,10 @@
 export type SettingsSection =
   | 'profiles'
-  | 'dictation'
   | 'history'
   | 'models'
   | 'vocabulary'
   | 'connections'
-  | 'general'
-  | 'advanced'
+  | 'settings'
 
 export interface SettingsNavItem {
   hash: SettingsSection
@@ -25,7 +23,7 @@ export const SETTINGS_NAV: SettingsNavGroup[] = [
     label: 'Dictation',
     items: [
       { hash: 'profiles', label: 'Profiles' },
-      { hash: 'dictation', label: 'Recording & HUD' },
+      { hash: 'vocabulary', label: 'Vocabulary' },
       { hash: 'history', label: 'History' },
     ],
   },
@@ -33,16 +31,12 @@ export const SETTINGS_NAV: SettingsNavGroup[] = [
     label: 'Resources',
     items: [
       { hash: 'models', label: 'Models' },
-      { hash: 'vocabulary', label: 'Vocabulary' },
       { hash: 'connections', label: 'Connections' },
     ],
   },
   {
     label: 'Application',
-    items: [
-      { hash: 'general', label: 'General' },
-      { hash: 'advanced', label: 'Advanced' },
-    ],
+    items: [{ hash: 'settings', label: 'Settings' }],
   },
 ]
 
@@ -53,6 +47,9 @@ const LEGACY_ROUTES: Record<string, SettingsSection> = {
   refinement: 'connections',
   dictionary: 'vocabulary',
   snippets: 'vocabulary',
+  general: 'settings',
+  dictation: 'settings',
+  advanced: 'settings',
 }
 
 function knownSection(value: string): SettingsSection | null {
@@ -62,15 +59,15 @@ function knownSection(value: string): SettingsSection | null {
 
 /** Resolves current and pre-PR route hashes. The remembered section is used
  * only when a window opens without a hash; a genuinely unknown link goes to
- * General so a typo never inherits unrelated navigation history. */
+ * Settings so a typo never inherits unrelated navigation history. */
 export function resolveSettingsSection(raw: string, remembered = ''): SettingsSection {
   const normalized = raw.trim().replace(/^#/, '').toLowerCase()
-  if (normalized) return knownSection(normalized) ?? 'general'
-  return knownSection(remembered.trim().replace(/^#/, '').toLowerCase()) ?? 'general'
+  if (normalized) return knownSection(normalized) ?? 'settings'
+  return knownSection(remembered.trim().replace(/^#/, '').toLowerCase()) ?? 'settings'
 }
 
 export function settingsSectionLabel(section: SettingsSection): string {
-  return ITEMS.find((item) => item.hash === section)?.label ?? 'General'
+  return ITEMS.find((item) => item.hash === section)?.label ?? 'Settings'
 }
 
 export function settingsWindowTitle(section: SettingsSection): string {

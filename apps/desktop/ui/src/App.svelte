@@ -17,14 +17,12 @@
   import { applyTheme } from './lib/theme'
   import { deepEqual, defaultSettings, type PlatformCapabilities } from './lib/types'
 
-  import General from './pages/General.svelte'
-  import Dictation from './pages/Dictation.svelte'
   import Profiles from './pages/Profiles.svelte'
   import Models from './pages/Engines.svelte'
   import Connections from './pages/Refinement.svelte'
   import Vocabulary from './pages/Vocabulary.svelte'
   import History from './pages/History.svelte'
-  import Advanced from './pages/Advanced.svelte'
+  import Settings from './pages/Settings.svelte'
   import Onboarding from './pages/Onboarding.svelte'
 
   // The onboarding wizard is shown when we have no signal that this user has
@@ -161,11 +159,7 @@
       {/each}
     </nav>
     <main>
-      {#if hash === 'general'}
-        <General />
-      {:else if hash === 'dictation'}
-        <Dictation />
-      {:else if hash === 'profiles'}
+      {#if hash === 'profiles'}
         <Profiles {capabilities} />
       {:else if hash === 'models'}
         <Models />
@@ -175,8 +169,8 @@
         <Vocabulary />
       {:else if hash === 'history'}
         <History />
-      {:else if hash === 'advanced'}
-        <Advanced {capabilities} />
+      {:else if hash === 'settings'}
+        <Settings {capabilities} />
       {/if}
     </main>
   </div>

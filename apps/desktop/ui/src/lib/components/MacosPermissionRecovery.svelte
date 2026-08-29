@@ -31,11 +31,15 @@
   }
 </script>
 
-<pre>{command}</pre>
 <div class="actions">
   <button type="button" onclick={openSettings}>Open settings</button>
-  <button type="button" onclick={copyCommand}>{copied ? 'Copied' : 'Copy reset command'}</button>
 </div>
+<details>
+  <summary>Permission recovery</summary>
+  <p>Use this only when Utter is missing from System Settings or its saved permission is stale.</p>
+  <pre>{command}</pre>
+  <button type="button" onclick={copyCommand}>{copied ? 'Copied' : 'Copy reset command'}</button>
+</details>
 
 <style>
   pre {
@@ -52,5 +56,20 @@
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-2);
+  }
+
+  details {
+    margin-top: var(--space-2);
+    font-size: 12px;
+  }
+
+  summary {
+    color: var(--text-muted);
+    cursor: pointer;
+    font-weight: 600;
+  }
+
+  p {
+    color: var(--text-muted);
   }
 </style>
