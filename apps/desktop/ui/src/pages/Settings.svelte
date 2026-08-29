@@ -9,6 +9,7 @@
   import Slider from '../lib/components/Slider.svelte'
   import TextInput from '../lib/components/TextInput.svelte'
   import Toggle from '../lib/components/Toggle.svelte'
+  import { formatPercent, t, type MessageKey } from '../lib/i18n'
   import { settingsStore } from '../lib/stores'
   import type {
     DictationMode,
@@ -31,44 +32,51 @@
   let { capabilities }: Props = $props()
   let settings = $derived($settingsStore!)
 
-  const THEME_OPTIONS: { value: Theme; label: string }[] = [
-    { value: 'system', label: 'Match system' },
-    { value: 'light', label: 'Light' },
-    { value: 'dark', label: 'Dark' },
-  ]
+  let themeOptions = $derived<{ value: Theme; label: string }[]>([
+    { value: 'system', label: $t('settings.theme.system') },
+    { value: 'light', label: $t('settings.theme.light') },
+    { value: 'dark', label: $t('settings.theme.dark') },
+  ])
 
-  const MODE_OPTIONS: { value: DictationMode; label: string }[] = [
-    { value: 'push_to_talk', label: 'Push to talk (hold hotkey)' },
-    { value: 'toggle', label: 'Toggle (press to start, press to stop)' },
-  ]
+  let modeOptions = $derived<{ value: DictationMode; label: string }[]>([
+    { value: 'push_to_talk', label: $t('settings.recordingMode.pushToTalk') },
+    { value: 'toggle', label: $t('settings.recordingMode.toggle') },
+  ])
 
-  const INJECTION_OPTIONS: { value: InjectionPreference; label: string }[] = [
-    { value: 'auto', label: 'Auto (best available)' },
-    { value: 'clipboard_paste', label: 'Clipboard + paste' },
-    { value: 'type', label: 'Simulated typing' },
-    { value: 'clipboard_only', label: 'Clipboard only (no auto-paste)' },
-  ]
+  let injectionOptions = $derived<{ value: InjectionPreference; label: string }[]>([
+    { value: 'auto', label: $t('settings.injection.auto') },
+    { value: 'clipboard_paste', label: $t('settings.injection.paste') },
+    { value: 'type', label: $t('settings.injection.type') },
+    { value: 'clipboard_only', label: $t('settings.injection.clipboard') },
+  ])
 
-  const HUD_PLACEMENT_OPTIONS: { value: HudPlacement; label: string }[] = [
-    { value: 'auto', label: 'Automatic (near the caret)' },
-    { value: 'pointer', label: 'Near the pointer' },
-    { value: 'bottom_center', label: 'Bottom center' },
-  ]
+  let hudPlacementOptions = $derived<{ value: HudPlacement; label: string }[]>([
+    { value: 'auto', label: $t('settings.hudPosition.auto') },
+    { value: 'pointer', label: $t('settings.hudPosition.pointer') },
+    { value: 'bottom_center', label: $t('settings.hudPosition.bottom') },
+  ])
 
   const LOG_LEVEL_OPTIONS = ['trace', 'debug', 'info', 'warn', 'error'].map((value) => ({
     value,
     label: value,
   }))
 
-  const MODEL_IDLE_OPTIONS = [
-    { value: '900', label: 'After 15 minutes' },
-    { value: '1800', label: 'After 30 minutes' },
-    { value: '3600', label: 'After 1 hour' },
-    { value: '0', label: 'Never' },
-  ]
+  let modelIdleOptions = $derived([
+    { value: '900', label: $t('settings.modelIdle.15m') },
+    { value: '1800', label: $t('settings.modelIdle.30m') },
+    { value: '3600', label: $t('settings.modelIdle.1h') },
+    { value: '0', label: $t('settings.modelIdle.never') },
+  ])
+
+  const PERMISSION_STATUS_KEYS: Record<PermissionStatus, MessageKey> = {
+    granted: 'permission.status.granted',
+    denied: 'permission.status.denied',
+    not_determined: 'permission.status.notDetermined',
+    unavailable: 'permission.status.unavailable',
+  }
 
   let availableInjectionOptions = $derived(
-    INJECTION_OPTIONS.filter((option) => capabilities.injection_methods.includes(option.value)),
+    injectionOptions.filter((option) => capabilities.injection_methods.includes(option.value)),
   )
   let configuredInjectionAvailable = $derived(
     capabilities.injection_methods.includes(settings.advanced.injection),
@@ -101,7 +109,7 @@
     return Math.min(100, Math.round((progress.downloaded / progress.total) * 100))
   })
   let deviceOptions = $derived([
-    { value: '', label: 'System default' },
+    { value: '', label: $t('settings.systemDefault') },
     ...devices.map((device) => ({ value: device, label: device })),
   ])
 
@@ -156,7 +164,7 @@
     diagnosticsError = ''
     try {
       await api.openLogs()
-      diagnosticsMessage = 'Opened the log folder.'
+      diagnosticsMessage = $t('settings.logsOpened')
     } catch (err) {
       diagnosticsError = String(err)
     } finally {
@@ -171,7 +179,7 @@
     try {
       const report = await api.copyDiagnostics()
       await navigator.clipboard.writeText(report)
-      diagnosticsMessage = 'Safe diagnostic report copied.'
+      diagnosticsMessage = $t('settings.reportCopied')
     } catch (err) {
       diagnosticsError = String(err)
     } finally {
@@ -187,8 +195,8 @@
     try {
       updateCheck = await api.checkForUpdate()
       updateMessage = updateCheck.update
-        ? `Utter ${updateCheck.update.version} is ready to install.`
-        : `Utter ${updateCheck.current_version} is up to date.`
+        ? $t('settings.updateAvailable', { version: updateCheck.update.version })
+        : $t('settings.upToDate', { version: updateCheck.current_version })
     } catch (err) {
       updateError = String(err)
     } finally {
@@ -200,11 +208,11 @@
     if (!updateCheck?.update) return
     updaterBusy = 'install'
     updateError = ''
-    updateMessage = 'Downloading the signed update…'
+    updateMessage = $t('settings.updateDownloading')
     updateProgress = null
     try {
       await api.installUpdate()
-      updateMessage = 'Update installed. Restarting…'
+      updateMessage = $t('settings.updateInstalled')
     } catch (err) {
       updateError = String(err)
     } finally {
@@ -258,15 +266,15 @@
 </script>
 
 <header class="page-heading">
-  <h1>Settings</h1>
-  <p>Recording, microphone, output, appearance, performance, and maintenance.</p>
+  <h1>{$t('settings.title')}</h1>
+  <p>{$t('settings.description')}</p>
 </header>
 
-<Section title="Appearance" description="How Utter looks and starts.">
-  <Field label="Theme" for="theme">
+<Section title={$t('settings.appearance.title')} description={$t('settings.appearance.description')}>
+  <Field label={$t('settings.theme')} for="theme">
     <Select
       id="theme"
-      options={THEME_OPTIONS}
+      options={themeOptions}
       bind:value={
         () => settings.general.theme,
         (value) => settingsStore.patch({ general: { theme: value as Theme } })
@@ -274,7 +282,7 @@
     />
   </Field>
 
-  <Field label="Launch at login" for="autostart">
+  <Field label={$t('settings.launchAtLogin')} for="autostart">
     <Toggle
       id="autostart"
       bind:checked={
@@ -286,13 +294,13 @@
 </Section>
 
 <Section
-  title="Recording & microphone"
-  description="How recording starts, when it stops, and which audio input it listens to."
+  title={$t('settings.recording.title')}
+  description={$t('settings.recording.description')}
 >
-  <Field label="Recording mode" for="mode">
+  <Field label={$t('settings.recordingMode')} for="mode">
     <Select
       id="mode"
-      options={MODE_OPTIONS}
+      options={modeOptions}
       bind:value={
         () => settings.dictation.mode,
         (value) => settingsStore.patch({ dictation: { mode: value as DictationMode } })
@@ -300,13 +308,13 @@
     />
   </Field>
 
-  <Field label="Silence timeout" hint="Automatically stop after continuous silence.">
+  <Field label={$t('settings.silenceTimeout')} hint={$t('settings.silenceTimeoutHint')}>
     <div class="inline-row">
       <Toggle
         id="silence-timeout-enabled"
         bind:checked={() => timeoutEnabled, setTimeoutEnabled}
       />
-      <span class="muted">{timeoutEnabled ? 'On' : 'Off'}</span>
+      <span class="muted">{timeoutEnabled ? $t('common.on') : $t('common.off')}</span>
       {#if timeoutEnabled}
         <TextInput
           type="number"
@@ -314,12 +322,12 @@
           max={600}
           bind:value={() => timeoutValue, setTimeoutValue}
         />
-        <span class="muted">seconds</span>
+        <span class="muted">{$t('settings.seconds')}</span>
       {/if}
     </div>
   </Field>
 
-  <Field label="Audio input" for="audio-device">
+  <Field label={$t('settings.audioInput')} for="audio-device">
     {#if devicesError}
       <p class="error">{devicesError}</p>
     {/if}
@@ -336,16 +344,18 @@
 
   {#if capabilities.os === 'macos'}
     <Field
-      label="Microphone access"
-      hint="macOS remembers this permission for Utter's stable app identity."
+      label={$t('settings.microphoneAccess')}
+      hint={$t('settings.microphoneAccessHint')}
     >
       {#if permissionError}
         <p class="error">{permissionError}</p>
       {:else if microphonePermission === null}
-        <p class="muted">Checking…</p>
+        <p class="muted">{$t('common.checking')}</p>
       {:else}
         <p class:ok={microphonePermission === 'granted'}>
-          Status: {microphonePermission.replace('_', ' ')}
+          {$t('settings.permissionStatus', {
+            status: $t(PERMISSION_STATUS_KEYS[microphonePermission]),
+          })}
         </p>
         {#if microphonePermission === 'not_determined'}
           <button
@@ -353,12 +363,12 @@
             onclick={() => requestMacosPermission('microphone')}
             disabled={permissionBusy !== null}
           >
-            {permissionBusy === 'microphone' ? 'Requesting…' : 'Allow microphone'}
+            {permissionBusy === 'microphone'
+              ? $t('common.requesting')
+              : $t('settings.allowMicrophone')}
           </button>
         {:else if microphonePermission === 'denied'}
-          <p class="warning">
-            Enable Utter in System Settings → Privacy & Security → Microphone.
-          </p>
+          <p class="warning">{$t('settings.microphoneDenied')}</p>
           {#if microphoneResetCommand}
             <MacosPermissionRecovery
               kind="microphone"
@@ -366,21 +376,21 @@
               onError={(message) => (permissionError = message)}
             />
           {/if}
-          <button type="button" onclick={refreshMacosPermissions}>Check again</button>
+          <button type="button" onclick={refreshMacosPermissions}>{$t('common.checkAgain')}</button>
         {/if}
       {/if}
     </Field>
   {/if}
 
   <Field
-    label="Live input level"
-    hint="Start dictation with a profile hotkey to verify that Utter hears your microphone."
+    label={$t('settings.liveInput')}
+    hint={$t('settings.liveInputHint')}
   >
     <div class="meter-row">
       <div
         class="input-meter"
         role="meter"
-        aria-label="Microphone input level"
+        aria-label={$t('hud.microphoneLevel')}
         aria-valuemin="0"
         aria-valuemax="100"
         aria-valuenow={Math.round(inputMeter * 100)}
@@ -390,26 +400,26 @@
       <span class="muted">
         {dictationPhase === 'recording'
           ? inputSignal(inputMeter) === 'voice'
-            ? 'Voice detected'
+            ? $t('settings.input.voice')
             : inputSignal(inputMeter) === 'quiet'
-              ? 'Quiet input'
-              : 'No signal'
-          : 'Waiting for recording'}
+              ? $t('settings.input.quiet')
+              : $t('settings.input.none')
+          : $t('settings.input.waiting')}
       </span>
     </div>
   </Field>
 
   <Field
-    label="Silence sensitivity"
+    label={$t('settings.silenceSensitivity')}
     for="vad"
-    hint="Higher values treat more quiet audio as silence. Lower this if whispers stop recording too early."
+    hint={$t('settings.silenceSensitivityHint')}
   >
     <Slider
       id="vad"
       min={0}
       max={1}
       step={0.05}
-      format={(value) => `${Math.round(value * 100)}%`}
+      format={(value) => formatPercent(value)}
       bind:value={
         () => settings.advanced.vad_sensitivity,
         (value) => settingsStore.patch({ advanced: { vad_sensitivity: value } })
@@ -419,10 +429,10 @@
 </Section>
 
 <Section
-  title="Output & HUD"
-  description="Where the floating status appears and how finished text reaches the active app."
+  title={$t('settings.output.title')}
+  description={$t('settings.output.description')}
 >
-  <Field label="Show HUD" for="hud" hint="Show recording state, input level, and live preview.">
+  <Field label={$t('settings.showHud')} for="hud" hint={$t('settings.showHudHint')}>
     <Toggle
       id="hud"
       bind:checked={
@@ -434,13 +444,13 @@
 
   {#if capabilities.os === 'macos'}
     <Field
-      label="HUD position"
+      label={$t('settings.hudPosition')}
       for="hud-placement"
-      hint="Automatic uses the text caret when Accessibility is allowed, then falls back to the pointer."
+      hint={$t('settings.hudPositionHint')}
     >
       <Select
         id="hud-placement"
-        options={HUD_PLACEMENT_OPTIONS}
+        options={hudPlacementOptions}
         bind:value={
           () => settings.dictation.hud_placement,
           (value) =>
@@ -451,9 +461,9 @@
   {/if}
 
   <Field
-    label="Text insertion"
+    label={$t('settings.textInsertion')}
     for="injection"
-    hint="How the final transcript is delivered to the focused application."
+    hint={$t('settings.textInsertionHint')}
   >
     <Select
       id="injection"
@@ -465,25 +475,24 @@
       }
     />
     {#if !configuredInjectionAvailable}
-      <p class="warning">
-        The configured method is unavailable on {capabilities.os}; choose one of the supported
-        methods above.
-      </p>
+      <p class="warning">{$t('settings.injectionUnavailable', { os: capabilities.os })}</p>
     {/if}
   </Field>
 
   {#if capabilities.os === 'macos'}
     <Field
-      label="Accessibility access"
-      hint="Required for caret-aware HUD placement and automatic Command-V insertion."
+      label={$t('settings.accessibility')}
+      hint={$t('settings.accessibilityHint')}
     >
       {#if permissionError}
         <p class="error">{permissionError}</p>
       {:else if textInjectionPermission === null}
-        <p class="muted">Checking…</p>
+        <p class="muted">{$t('common.checking')}</p>
       {:else}
         <p class:ok={textInjectionPermission === 'granted'}>
-          Status: {textInjectionPermission.replace('_', ' ')}
+          {$t('settings.permissionStatus', {
+            status: $t(PERMISSION_STATUS_KEYS[textInjectionPermission]),
+          })}
         </p>
         {#if textInjectionPermission === 'not_determined'}
           <button
@@ -491,12 +500,12 @@
             onclick={() => requestMacosPermission('text_injection')}
             disabled={permissionBusy !== null}
           >
-            {permissionBusy === 'text_injection' ? 'Requesting…' : 'Allow Accessibility'}
+            {permissionBusy === 'text_injection'
+              ? $t('common.requesting')
+              : $t('settings.allowAccessibility')}
           </button>
         {:else if textInjectionPermission === 'denied'}
-          <p class="warning">
-            Enable Utter in System Settings → Privacy & Security → Accessibility.
-          </p>
+          <p class="warning">{$t('settings.accessibilityDenied')}</p>
           {#if textInjectionResetCommand}
             <MacosPermissionRecovery
               kind="text_injection"
@@ -504,7 +513,7 @@
               onError={(message) => (permissionError = message)}
             />
           {/if}
-          <button type="button" onclick={refreshMacosPermissions}>Check again</button>
+          <button type="button" onclick={refreshMacosPermissions}>{$t('common.checkAgain')}</button>
         {/if}
       {/if}
     </Field>
@@ -512,17 +521,17 @@
 </Section>
 
 <Section
-  title="Performance & maintenance"
-  description="Memory use, updates, and tools for diagnosing a problem."
+  title={$t('settings.performance.title')}
+  description={$t('settings.performance.description')}
 >
   <Field
-    label="Unload idle models"
+    label={$t('settings.unloadModels')}
     for="model-idle-timeout"
-    hint="Release memory after a language profile is unused. Its next hotkey press loads it again."
+    hint={$t('settings.unloadModelsHint')}
   >
     <Select
       id="model-idle-timeout"
-      options={MODEL_IDLE_OPTIONS}
+      options={modelIdleOptions}
       bind:value={
         () => settings.advanced.model_idle_timeout_secs.toString(),
         (value) =>
@@ -532,31 +541,37 @@
   </Field>
 
   <Field
-    label="Updates"
-    hint="Release builds verify the manifest and archive signature. Updates are never forced."
+    label={$t('settings.updates')}
+    hint={$t('settings.updatesHint')}
   >
     {#if capabilities.updater}
       <button type="button" onclick={checkForUpdate} disabled={updaterBusy !== null}>
-        {updaterBusy === 'check' ? 'Checking…' : 'Check for updates'}
+        {updaterBusy === 'check' ? $t('common.checking') : $t('settings.checkUpdates')}
       </button>
       {#if updateCheck?.update}
         <div class="update-card">
           <p>
             <strong>Utter {updateCheck.update.version}</strong>
-            <span class="muted">Installed: {updateCheck.current_version}</span>
+            <span class="muted">
+              {$t('settings.installedVersion', { version: updateCheck.current_version })}
+            </span>
           </p>
           {#if updateCheck.update.notes}
             <p class="update-notes">{updateCheck.update.notes}</p>
           {/if}
           <button type="button" onclick={installUpdate} disabled={updaterBusy !== null}>
-            {updaterBusy === 'install' ? 'Installing…' : 'Install and restart'}
+            {updaterBusy === 'install'
+              ? $t('settings.installing')
+              : $t('settings.installRestart')}
           </button>
         </div>
       {/if}
       {#if updaterBusy === 'install'}
         <progress max="100" value={updatePercent ?? undefined}></progress>
         <p class="muted">
-          {updatePercent === null ? 'Downloading…' : `Downloaded ${updatePercent}%`}
+          {updatePercent === null
+            ? $t('settings.downloading')
+            : $t('settings.downloadedPercent', { percent: updatePercent })}
         </p>
       {/if}
       {#if updateError}
@@ -565,20 +580,20 @@
         <p class="ok">{updateMessage}</p>
       {/if}
     {:else}
-      <p class="muted">Update checks are available in signed release builds.</p>
+      <p class="muted">{$t('settings.updatesReleaseOnly')}</p>
     {/if}
   </Field>
 
   <Field
-    label="Diagnostics"
-    hint="The safe report excludes API keys, transcripts, prompts, dictionary terms, endpoints, and personal paths. Nothing is sent automatically."
+    label={$t('settings.diagnostics')}
+    hint={$t('settings.diagnosticsHint')}
   >
     <div class="diagnostic-actions">
       <button type="button" onclick={openLogs} disabled={diagnosticsBusy !== null}>
-        {diagnosticsBusy === 'open' ? 'Opening…' : 'Open logs'}
+        {diagnosticsBusy === 'open' ? $t('settings.opening') : $t('settings.openLogs')}
       </button>
       <button type="button" onclick={copyDiagnostics} disabled={diagnosticsBusy !== null}>
-        {diagnosticsBusy === 'copy' ? 'Copying…' : 'Copy safe report'}
+        {diagnosticsBusy === 'copy' ? $t('settings.copying') : $t('settings.copyReport')}
       </button>
     </div>
     {#if diagnosticsError}
@@ -589,9 +604,9 @@
   </Field>
 
   <details class="developer-settings">
-    <summary>For developers</summary>
+    <summary>{$t('settings.developers')}</summary>
     <div class="developer-body">
-      <Field label="Log level" for="log-level">
+      <Field label={$t('settings.logLevel')} for="log-level">
         <Select
           id="log-level"
           options={LOG_LEVEL_OPTIONS}
