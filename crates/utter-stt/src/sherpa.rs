@@ -46,15 +46,18 @@ pub struct SherpaConfig {
 /// Model-family-specific configuration for
 /// [`SherpaStreamingEngine::load_with_config`].
 ///
-/// Streaming transducers support dictionary terms as recognition hotwords.
-/// T-One is a CTC model, so it always uses greedy search and a plain stream;
-/// accepting a [`SherpaConfig`] for it would misleadingly suggest that its
-/// `hotwords` field takes effect.
+/// Streaming Zipformer transducers support dictionary terms as recognition
+/// hotwords. Nemotron needs a per-stream language option and T-One is a CTC
+/// model; both therefore use an explicit configuration that does not
+/// misleadingly suggest that [`SherpaConfig::hotwords`] takes effect.
 #[derive(Debug, Clone)]
 pub enum SherpaStreamingConfig {
     /// The existing Zipformer transducer path, including hotword-aware beam
     /// search when the dictionary is non-empty.
     Transducer(SherpaConfig),
+    /// NVIDIA Nemotron 3.5 streaming transducer. Language is selected per
+    /// utterance from [`TranscribeOptions`], with `auto` as the safe default.
+    Nemotron { num_threads: usize },
     /// A streaming T-One CTC model. CTC does not support sherpa-onnx's
     /// transducer hotword path.
     TOneCtc { num_threads: usize },
@@ -437,14 +440,15 @@ pub struct SherpaStreamingEngine {
     /// [`track_partial`] can suppress re-emitting an unchanged hypothesis.
     last_partial: String,
     /// Model-family behavior that cannot be represented by the native
-    /// recognizer alone: T-One needs boundary padding and must never create a
-    /// hotword stream, while transducers keep the existing behavior.
+    /// recognizer alone: Nemotron needs a per-stream language option, T-One
+    /// needs boundary padding, and neither may create a hotword stream.
     family: StreamingModelFamily,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StreamingModelFamily {
     Transducer,
+    Nemotron,
     TOneCtc,
 }
 
@@ -474,7 +478,7 @@ const T_ONE_PADDING: StreamPadding = StreamPadding {
 
 fn stream_padding(family: StreamingModelFamily) -> Option<StreamPadding> {
     match family {
-        StreamingModelFamily::Transducer => None,
+        StreamingModelFamily::Transducer | StreamingModelFamily::Nemotron => None,
         StreamingModelFamily::TOneCtc => Some(T_ONE_PADDING),
     }
 }
@@ -622,6 +626,40 @@ fn build_streaming_recognizer_config(
                 family: StreamingModelFamily::Transducer,
             })
         }
+        SherpaStreamingConfig::Nemotron { num_threads } => {
+            let [encoder_name, decoder_name, joiner_name, tokens_name] =
+                STREAMING_TRANSDUCER_MODEL_FILES;
+            let encoder = resolve_required_file(dir, &[encoder_name])?;
+            let decoder = resolve_required_file(dir, &[decoder_name])?;
+            let joiner = resolve_required_file(dir, &[joiner_name])?;
+            let tokens = resolve_required_file(dir, &[tokens_name])?;
+
+            let config = OnlineRecognizerConfig {
+                model_config: OnlineModelConfig {
+                    transducer: OnlineTransducerModelConfig {
+                        encoder: Some(path_to_string(&encoder)?),
+                        decoder: Some(path_to_string(&decoder)?),
+                        joiner: Some(path_to_string(&joiner)?),
+                    },
+                    tokens: Some(path_to_string(&tokens)?),
+                    num_threads: (*num_threads).clamp(1, i32::MAX as usize) as i32,
+                    // sherpa-onnx auto-detects Nemotron's NeMo transducer
+                    // layout from the exported ONNX model metadata.
+                    ..Default::default()
+                },
+                // The Nemotron integration currently exposes language
+                // selection but not dictionary biasing, so keep its native
+                // greedy decoder and always create a plain stream.
+                decoding_method: Some("greedy_search".to_string()),
+                ..Default::default()
+            };
+
+            Ok(BuiltStreamingRecognizerConfig {
+                recognizer: config,
+                hotwords: None,
+                family: StreamingModelFamily::Nemotron,
+            })
+        }
         SherpaStreamingConfig::TOneCtc { num_threads } => {
             let [model_name, tokens_name] = STREAMING_T_ONE_CTC_MODEL_FILES;
             let model = resolve_required_file(dir, &[model_name])?;
@@ -652,25 +690,60 @@ fn build_streaming_recognizer_config(
     }
 }
 
-/// Creates the native stream according to its model family. T-One always
-/// uses the plain stream constructor and receives its required leading
-/// silence before any microphone audio; transducers retain their existing
-/// optional-hotword behavior exactly.
+/// Turns a profile's BCP-47 hint into the language token Nemotron accepts.
+/// Empty, `auto`, malformed and non-ASCII values all fall back to automatic
+/// detection. Region/script suffixes are intentionally removed (`ru-RU`
+/// becomes `ru`) because the model's stream option uses base language codes.
+fn nemotron_language_hint(language: Option<&str>) -> String {
+    let root = language
+        .map(str::trim)
+        .filter(|language| !language.is_empty())
+        .and_then(|language| language.split(['-', '_']).next())
+        .unwrap_or("auto");
+
+    if root.eq_ignore_ascii_case("auto")
+        || root.is_empty()
+        || !root
+            .chars()
+            .all(|character| character.is_ascii_alphabetic())
+    {
+        "auto".to_string()
+    } else {
+        root.to_ascii_lowercase()
+    }
+}
+
+/// Creates the native stream according to its model family. Nemotron and
+/// T-One always use the plain stream constructor; Nemotron receives its
+/// language option before audio and T-One receives its required leading
+/// silence. Zipformer transducers retain their optional-hotword behavior.
 fn create_online_stream(
     recognizer: &OnlineRecognizer,
     family: StreamingModelFamily,
     hotwords: Option<&str>,
+    language: Option<&str>,
 ) -> OnlineStream {
     let stream = match family {
         StreamingModelFamily::Transducer => match hotwords {
             Some(hotwords) => recognizer.create_stream_with_hotwords(hotwords),
             None => recognizer.create_stream(),
         },
+        StreamingModelFamily::Nemotron => {
+            debug_assert!(
+                hotwords.is_none(),
+                "Nemotron does not use dictionary hotwords"
+            );
+            recognizer.create_stream()
+        }
         StreamingModelFamily::TOneCtc => {
             debug_assert!(hotwords.is_none(), "T-One CTC does not support hotwords");
             recognizer.create_stream()
         }
     };
+
+    if family == StreamingModelFamily::Nemotron {
+        stream.set_option("language", &nemotron_language_hint(language));
+    }
 
     if let Some(padding) = stream_padding(family) {
         let silence = vec![0.0_f32; padding.leading_samples];
@@ -716,9 +789,14 @@ impl SttEngine for SherpaStreamingEngine {
             .expect("invariant: streaming engine constructors always set recognizer to Some");
         let hotwords = self.hotwords.as_deref();
         let family = self.family;
+        if self.stream.is_none() {
+            let language = self.opts.as_ref().and_then(|opts| opts.language.as_deref());
+            self.stream = Some(create_online_stream(recognizer, family, hotwords, language));
+        }
         let stream = self
             .stream
-            .get_or_insert_with(|| create_online_stream(recognizer, family, hotwords));
+            .as_ref()
+            .expect("invariant: the streaming session was created above");
 
         stream.accept_waveform(SAMPLE_RATE as i32, &samples_to_f32(samples));
         while recognizer.is_ready(stream) {
@@ -742,10 +820,9 @@ impl SttEngine for SherpaStreamingEngine {
         // `feed` is expected to have run at least once, but a begin()
         // immediately followed by finish() must not panic — fall back to a
         // fresh, silent stream so it decodes to empty text instead.
-        let stream = self
-            .stream
-            .take()
-            .unwrap_or_else(|| create_online_stream(recognizer, self.family, hotwords));
+        let stream = self.stream.take().unwrap_or_else(|| {
+            create_online_stream(recognizer, self.family, hotwords, opts.language.as_deref())
+        });
 
         append_trailing_padding(&stream, self.family);
         stream.input_finished();
@@ -918,6 +995,21 @@ mod tests {
     }
 
     #[test]
+    fn streaming_nemotron_missing_required_files_reports_model_not_found() {
+        let dir = std::env::temp_dir().join("utter-stt-test-sherpa-nemotron-empty-model");
+        std::fs::create_dir_all(&dir).expect("failed to create empty test model dir");
+
+        let err = build_streaming_recognizer_config(
+            &dir,
+            &SherpaStreamingConfig::Nemotron { num_threads: 2 },
+        )
+        .expect_err("a Nemotron directory missing its files must not load");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(matches!(err, SttError::ModelNotFound(_)), "got {err:?}");
+    }
+
+    #[test]
     fn streaming_transducer_config_preserves_hotword_beam_search_policy() {
         let dir = std::env::temp_dir().join("utter-stt-test-sherpa-transducer-config");
         std::fs::create_dir_all(&dir).expect("failed to create test model dir");
@@ -983,8 +1075,50 @@ mod tests {
     }
 
     #[test]
+    fn streaming_nemotron_config_is_transducer_greedy_and_has_no_hotwords() {
+        let dir = std::env::temp_dir().join("utter-stt-test-sherpa-nemotron-config");
+        std::fs::create_dir_all(&dir).expect("failed to create test model dir");
+        for name in STREAMING_TRANSDUCER_MODEL_FILES {
+            std::fs::write(dir.join(name), b"placeholder").expect("failed to write test file");
+        }
+
+        let built = build_streaming_recognizer_config(
+            &dir,
+            &SherpaStreamingConfig::Nemotron { num_threads: 0 },
+        )
+        .expect("present files must produce a config without invoking ONNX Runtime");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(built.family, StreamingModelFamily::Nemotron);
+        assert_eq!(built.hotwords, None);
+        assert_eq!(
+            built.recognizer.decoding_method.as_deref(),
+            Some("greedy_search")
+        );
+        assert_eq!(built.recognizer.max_active_paths, 0);
+        assert_eq!(built.recognizer.hotwords_score, 0.0);
+        assert_eq!(built.recognizer.model_config.num_threads, 1);
+        assert_eq!(
+            built.recognizer.model_config.transducer.encoder,
+            Some(dir.join("encoder.onnx").display().to_string())
+        );
+        assert!(built.recognizer.model_config.t_one_ctc.model.is_none());
+    }
+
+    #[test]
+    fn nemotron_language_hint_normalizes_bcp47_and_defaults_safely() {
+        assert_eq!(nemotron_language_hint(Some("ru-RU")), "ru");
+        assert_eq!(nemotron_language_hint(Some("EN_us")), "en");
+        assert_eq!(nemotron_language_hint(None), "auto");
+        assert_eq!(nemotron_language_hint(Some("")), "auto");
+        assert_eq!(nemotron_language_hint(Some("auto")), "auto");
+        assert_eq!(nemotron_language_hint(Some("ru\0en")), "auto");
+    }
+
+    #[test]
     fn only_t_one_receives_model_boundary_padding() {
         assert_eq!(stream_padding(StreamingModelFamily::Transducer), None);
+        assert_eq!(stream_padding(StreamingModelFamily::Nemotron), None);
         assert_eq!(
             stream_padding(StreamingModelFamily::TOneCtc),
             Some(StreamPadding {

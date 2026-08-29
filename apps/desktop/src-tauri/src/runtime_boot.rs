@@ -582,10 +582,10 @@ const T_ONE_DRAFT_THREADS: usize = 1;
 ///
 /// This is the sole construction site of [`utter_stt::SherpaStreamingConfig`]
 /// in the desktop app. Keeping the family match here makes two safety rules
-/// explicit and testable before the native loader is reached: transducers get
-/// the profile dictionary and the benchmarked [`DRAFT_THREADS`] budget;
-/// T-One gets one thread and never receives dictionary terms, because
-/// sherpa-onnx hotwords are a transducer-only feature.
+/// explicit and testable before the native loader is reached: Zipformer
+/// transducers get the profile dictionary and the benchmarked
+/// [`DRAFT_THREADS`] budget; Nemotron gets the same M4-tested budget but no
+/// dictionary terms; T-One gets one thread and no dictionary terms.
 #[cfg(feature = "sherpa")]
 fn draft_streaming_config(
     model_id: &str,
@@ -606,6 +606,16 @@ fn draft_streaming_config(
                 hotwords: dictionary_terms.to_vec(),
             }),
             None,
+        )),
+        utter_store::StreamingModelFamily::Nemotron => Ok((
+            utter_stt::SherpaStreamingConfig::Nemotron {
+                num_threads: DRAFT_THREADS,
+            },
+            (!dictionary_terms.is_empty()).then(|| {
+                "Nemotron preview does not currently use dictionary hotwords. Live preview works \
+                 with automatic language detection; the final transcript is unaffected."
+                    .to_string()
+            }),
         )),
         utter_store::StreamingModelFamily::TOneCtc => Ok((
             utter_stt::SherpaStreamingConfig::TOneCtc {
@@ -1307,6 +1317,9 @@ mod tests {
                 utter_store::StreamingModelFamily::Transducer => {
                     utter_stt::sherpa::STREAMING_TRANSDUCER_MODEL_FILES.to_vec()
                 }
+                utter_store::StreamingModelFamily::Nemotron => {
+                    utter_stt::sherpa::STREAMING_TRANSDUCER_MODEL_FILES.to_vec()
+                }
                 utter_store::StreamingModelFamily::TOneCtc => {
                     utter_stt::sherpa::STREAMING_T_ONE_CTC_MODEL_FILES.to_vec()
                 }
@@ -1395,6 +1408,35 @@ mod tests {
         let notice = notice.expect("ignored preview hotwords must be explained");
         assert!(notice.contains("does not support dictionary hotwords"));
         assert!(notice.contains("Live preview works without biasing"));
+        assert!(notice.contains("the final transcript is unaffected"));
+    }
+
+    /// Nemotron uses the measured two-thread Apple Silicon preview budget and
+    /// keeps dictionary biasing out of its greedy multilingual decoder. The
+    /// limitation is reported without disabling the otherwise working draft.
+    #[cfg(feature = "sherpa")]
+    #[test]
+    fn nemotron_preview_uses_draft_budget_and_reports_unsupported_dictionary_biasing() {
+        let (cfg, notice) = draft_streaming_config(
+            "nemotron-3.5-multilingual",
+            Some(utter_store::StreamingModelFamily::Nemotron),
+            &["Kubernetes".to_string()],
+        )
+        .expect("Nemotron remains usable when the dictionary is non-empty");
+
+        let utter_stt::SherpaStreamingConfig::Nemotron { num_threads } = cfg else {
+            panic!("a Nemotron catalog entry must produce Nemotron config");
+        };
+        let expected = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            2
+        } else {
+            1
+        };
+        assert_eq!(num_threads, expected);
+
+        let notice = notice.expect("ignored preview hotwords must be explained");
+        assert!(notice.contains("does not currently use dictionary hotwords"));
+        assert!(notice.contains("automatic language detection"));
         assert!(notice.contains("the final transcript is unaffected"));
     }
 

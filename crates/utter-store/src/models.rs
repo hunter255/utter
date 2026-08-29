@@ -98,6 +98,7 @@ pub enum ModelRole {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamingModelFamily {
     Transducer,
+    Nemotron,
     TOneCtc,
 }
 
@@ -480,6 +481,57 @@ const CATALOG: &[CatalogEntry] = &[
                 sha256: "27f7b3ba2096c572375fba1a6b29af1f80d86e08a329940612908112695f97e0",
                 name: "tokens.txt",
                 size_bytes: 202,
+            },
+        ],
+    },
+    // Source: csukuangfj2/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11
+    // at ab43d895f5985b1bbab8b6eac8607fcdc05343f3. This is sherpa-onnx's
+    // int8 conversion of NVIDIA Nemotron 3.5 ASR Streaming 0.6B, licensed
+    // under NVIDIA Open Model Development and Weight License 1.1. Upstream
+    // names are normalized to the streaming transducer filenames consumed by
+    // utter-stt; the four pinned files are the exact set used in the M4
+    // bilingual preview benchmark.
+    CatalogEntry {
+        id: "nemotron-3.5-multilingual",
+        engine: "sherpa-streaming",
+        label: "Nemotron 3.5 (multilingual, streaming)",
+        size_mb: 651,
+        supported_languages: &["*"],
+        role: ModelRole::Preview,
+        streaming_family: Some(StreamingModelFamily::Nemotron),
+        performance_class: PerformanceClass::Heavy,
+        recommendation_tags: &[
+            "Russian + English code-switching",
+            "Automatic language detection",
+            "Punctuation included",
+            "Live preview only",
+            "No dictionary bias",
+        ],
+        mirrors: HUGGING_FACE_MIRRORS,
+        artifacts: &[
+            Artifact {
+                url: "https://huggingface.co/csukuangfj2/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11/resolve/ab43d895f5985b1bbab8b6eac8607fcdc05343f3/encoder.int8.onnx",
+                sha256: "012e9321373af99021415e0b0eb3ec827b4be3153be6f30d9b448fe65e896e68",
+                name: "encoder.onnx",
+                size_bytes: 657_601_403,
+            },
+            Artifact {
+                url: "https://huggingface.co/csukuangfj2/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11/resolve/ab43d895f5985b1bbab8b6eac8607fcdc05343f3/decoder.int8.onnx",
+                sha256: "19f9c98fc6d0a2c33a65a43b36fdb2e914c26c0aa9764be3aebc502a1e982fb0",
+                name: "decoder.onnx",
+                size_bytes: 14_978_075,
+            },
+            Artifact {
+                url: "https://huggingface.co/csukuangfj2/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11/resolve/ab43d895f5985b1bbab8b6eac8607fcdc05343f3/joiner.int8.onnx",
+                sha256: "4101c7c679a0bc30483794b27a059e34e79232aa2068d78d51231a22c8b0d7ce",
+                name: "joiner.onnx",
+                size_bytes: 9_504_438,
+            },
+            Artifact {
+                url: "https://huggingface.co/csukuangfj2/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11/resolve/ab43d895f5985b1bbab8b6eac8607fcdc05343f3/tokens.txt",
+                sha256: "729cc103155bafa785f9cd45746cd41cabe97eab7182fc04d594129587958f8a",
+                name: "tokens.txt",
+                size_bytes: 131_440,
             },
         ],
     },
@@ -2662,6 +2714,40 @@ mod tests {
         assert!(entry
             .recommendation_tags
             .contains(&"Lowercase Cyrillic; no punctuation, digits, or Latin"));
+    }
+
+    #[test]
+    fn nemotron_catalog_entry_pins_the_benchmarked_multilingual_preview() {
+        let entry = CATALOG
+            .iter()
+            .find(|entry| entry.id == "nemotron-3.5-multilingual")
+            .expect("Nemotron must be in the catalog");
+
+        assert_eq!(entry.engine, "sherpa-streaming");
+        assert_eq!(entry.role, ModelRole::Preview);
+        assert_eq!(entry.streaming_family, Some(StreamingModelFamily::Nemotron));
+        assert_eq!(entry.supported_languages, &["*"]);
+        assert_eq!(entry.size_mb, 651);
+        assert_eq!(entry.artifacts.len(), 4);
+
+        let encoder = &entry.artifacts[0];
+        assert_eq!(encoder.name, "encoder.onnx");
+        assert_eq!(encoder.size_bytes, 657_601_403);
+        assert_eq!(
+            encoder.sha256,
+            "012e9321373af99021415e0b0eb3ec827b4be3153be6f30d9b448fe65e896e68"
+        );
+        assert!(encoder
+            .url
+            .contains("/ab43d895f5985b1bbab8b6eac8607fcdc05343f3/encoder.int8.onnx"));
+
+        assert!(entry
+            .recommendation_tags
+            .contains(&"Russian + English code-switching"));
+        assert!(entry
+            .recommendation_tags
+            .contains(&"Automatic language detection"));
+        assert!(entry.recommendation_tags.contains(&"Live preview only"));
     }
 
     #[test]

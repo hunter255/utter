@@ -36,7 +36,7 @@ function model(
 
 /** One entry per engine string the catalog uses (`crates/utter-store/src/models.rs`), so a
  * filter that matched the wrong one has somewhere wrong to land. The streaming entries cover
- * both installed states and both supported streaming families from the Rust catalog. */
+ * both installed states and every user-visible capability shape from the Rust catalog. */
 const CATALOG: ModelInfo[] = [
   model('small', 'whisper', true),
   model('parakeet-tdt-110m-en', 'sherpa', true, { supported_languages: ['en'] }),
@@ -45,6 +45,11 @@ const CATALOG: ModelInfo[] = [
     supported_languages: ['ru'],
     performance_class: 'balanced',
     recommendation_tags: ['Accuracy-focused Russian preview', 'Live preview only'],
+  }),
+  model('nemotron-3.5-multilingual', 'sherpa-streaming', false, {
+    supported_languages: ['*'],
+    performance_class: 'heavy',
+    recommendation_tags: ['Russian + English code-switching', 'Automatic language detection'],
   }),
   model('zipformer-en-small', 'sherpa-streaming', false, { supported_languages: ['en'] }),
 ]
@@ -57,6 +62,7 @@ describe('previewModels', () => {
     expect(previewModels(CATALOG).map((m) => m.id)).toEqual([
       'zipformer-ru-small',
       't-one-ru',
+      'nemotron-3.5-multilingual',
       'zipformer-en-small',
     ])
   })
@@ -116,6 +122,11 @@ describe('previewModelOptions', () => {
         value: 't-one-ru',
         label:
           't-one-ru label — Russian · Balanced · Accuracy-focused Russian preview · Live preview only',
+      },
+      {
+        value: 'nemotron-3.5-multilingual',
+        label:
+          'nemotron-3.5-multilingual label — Multilingual · Heavy · Russian + English code-switching · Automatic language detection (not downloaded)',
       },
       {
         value: 'zipformer-en-small',

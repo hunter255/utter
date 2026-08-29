@@ -211,7 +211,7 @@
     <Field
       label="Language"
       for="profile-{index}-language"
-      hint="BCP-47 tag passed to the engine as a transcription hint, e.g. en, ru."
+      hint="BCP-47 transcription hint, e.g. en or ru. Leave blank for automatic detection and mixed-language preview models."
     >
       <TextInput
         id="profile-{index}-language"
