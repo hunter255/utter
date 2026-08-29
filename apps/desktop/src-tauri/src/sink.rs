@@ -56,6 +56,47 @@ use crate::events::{DictationPhase, DictationState, Notice, NoticeKind};
 use crate::runtime::EventSink;
 use crate::state::AppState;
 
+#[cfg(target_os = "macos")]
+fn system_locale() -> Option<String> {
+    use core_foundation::array::CFArray;
+    use core_foundation::base::TCFType;
+    use core_foundation::string::CFString;
+    use core_foundation_sys::locale::CFLocaleCopyPreferredLanguages;
+
+    let raw = unsafe { CFLocaleCopyPreferredLanguages() };
+    if raw.is_null() {
+        return None;
+    }
+    let languages: CFArray<CFString> = unsafe { TCFType::wrap_under_create_rule(raw) };
+    languages.get(0).map(|language| language.to_string())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn system_locale() -> Option<String> {
+    ["LC_ALL", "LC_MESSAGES", "LANG"]
+        .into_iter()
+        .find_map(|name| std::env::var(name).ok().filter(|value| !value.is_empty()))
+}
+
+fn language_root(value: &str) -> &str {
+    value.split(['-', '_']).next().unwrap_or(value)
+}
+
+fn notification_locale(preference: Option<&str>, system: Option<&str>) -> &'static str {
+    if let Some(root) = preference.map(language_root) {
+        if root.eq_ignore_ascii_case("ru") {
+            return "ru";
+        }
+        if root.eq_ignore_ascii_case("en") {
+            return "en";
+        }
+    }
+    system
+        .map(language_root)
+        .filter(|root| root.eq_ignore_ascii_case("ru"))
+        .map_or("en", |_| "ru")
+}
+
 /// The Tauri window label the HUD lives at (see `tauri.conf.json`).
 const HUD_WINDOW_LABEL: &str = "hud";
 
@@ -334,11 +375,8 @@ impl EventSink for TauriEventSink {
             NoticeKind::Info => tracing::info!("{msg}"),
         }
 
-        let notice = Notice {
-            kind: notice_kind,
-            message: msg.to_string(),
-        };
-        if let Err(e) = self.app.emit("notice", notice) {
+        let notice = Notice::from_message(notice_kind, msg);
+        if let Err(e) = self.app.emit("notice", notice.clone()) {
             tracing::warn!("failed to emit notice: {e}");
         }
 
@@ -346,12 +384,24 @@ impl EventSink for TauriEventSink {
         // most of the app's life, and a notice nobody is on screen to read
         // is the bug this replaces (see `NoticeThrottle` for the rate).
         if self.notice_throttle.allow(msg) {
+            let locale = self
+                .app
+                .state::<AppState>()
+                .settings
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .general
+                .language
+                .clone();
+            let system_locale = system_locale();
+            let locale = notification_locale(locale.as_deref(), system_locale.as_deref());
+            let body = notice.localized_message(Some(locale));
             let result = self
                 .app
                 .notification()
                 .builder()
                 .title(NOTIFICATION_TITLE)
-                .body(msg)
+                .body(body)
                 .show();
             if let Err(e) = result {
                 tracing::warn!("failed to show desktop notification: {e}");
@@ -406,6 +456,15 @@ mod tests {
         assert_eq!(parse_kind("error"), NoticeKind::Error);
         assert_eq!(parse_kind("info"), NoticeKind::Info);
         assert_eq!(parse_kind("whatever"), NoticeKind::Info);
+    }
+
+    #[test]
+    fn native_notification_locale_honors_explicit_and_system_preferences() {
+        assert_eq!(notification_locale(Some("ru"), Some("en-US")), "ru");
+        assert_eq!(notification_locale(Some("en"), Some("ru-RU")), "en");
+        assert_eq!(notification_locale(None, Some("ru-RU")), "ru");
+        assert_eq!(notification_locale(Some("system"), Some("en-US")), "en");
+        assert_eq!(notification_locale(Some("future-locale"), Some("ru")), "ru");
     }
 
     /// The tests below are all written in terms of the two constants, which

@@ -381,6 +381,43 @@ export const ru = {
   'notice.warning': 'Предупреждение',
   'notice.error': 'Ошибка',
   'notice.dismiss': 'Закрыть уведомление',
+  'notice.technicalDetails': 'Технические подробности',
+  'notice.message.dictationEngineNotRunning': 'Движок диктовки не запущен.',
+  'notice.message.nothingHeard': 'Речь не распознана.',
+  'notice.message.refinementUnavailable':
+    'Обработка недоступна — вставлена исходная транскрипция.',
+  'notice.message.automaticPasteUnavailable':
+    'Автоматическая вставка недоступна, поэтому текст скопирован в буфер обмена. Проверьте разрешение на управление компьютером и оставьте нужное поле в фокусе.',
+  'notice.message.noLanguageProfile':
+    'Языковой профиль не настроен, поэтому у диктовки нет горячей клавиши.',
+  'notice.message.audioInputUnavailable':
+    'Аудиовход «{device}» недоступен. В этом сеансе используется системный микрофон.',
+  'notice.message.audioCaptureFailed': 'Не удалось начать запись с микрофона.',
+  'notice.message.transcriptionStartFailed': 'Не удалось запустить распознавание речи.',
+  'notice.message.livePreviewUnavailable':
+    'Предпросмотр недоступен. Итоговая диктовка продолжит работать.',
+  'notice.message.speechEngineFailed': 'Движок распознавания сообщил об ошибке.',
+  'notice.message.speechEngineFlushFailed':
+    'Движок распознавания не смог обработать последние фрагменты аудио.',
+  'notice.message.historySaveFailed': 'Не удалось сохранить диктовку в историю.',
+  'notice.message.modelDownloadFallback':
+    'Основной источник модели недоступен. Проверенная загрузка продолжится через {source}.',
+  'notice.message.modelActivationDeferred':
+    'Модель установлена, но пока не активирована. Сохраните профиль ещё раз или перезапустите Utter.',
+  'notice.message.dictationSetupUnavailable':
+    'Этот профиль диктовки требует настройки. Проверьте его движок и модель в настройках.',
+  'notice.message.hotkeyUnavailable':
+    'Горячая клавиша диктовки недоступна. Проверьте сочетание в профиле и разрешения macOS.',
+  'notice.message.livePreviewLimited':
+    'Выбранная модель предпросмотра ограниченно поддерживает словарь. Итоговая диктовка продолжит работать.',
+  'notice.message.refinementApiKeyOptional':
+    'Для обработки не задан API-ключ. Локальные провайдеры могут работать без него; добавьте ключ, если он нужен вашему провайдеру.',
+  'notice.message.refinementSetupUnavailable':
+    'Обработка транскрипции недоступна. Проверьте подключение к провайдеру и API-ключ.',
+  'notice.message.autostartSyncFailed':
+    'Настройка запуска при входе сохранена, но система не смогла её применить. Выключите и снова включите её в настройках.',
+  'notice.message.settingsMigrationFailed':
+    'Не удалось обновить формат настроек. Utter временно использует значения по умолчанию; перед изменениями откройте технические подробности.',
 
   'hud.state.idle': 'Ожидание',
   'hud.state.recording': 'Слушаю',

@@ -122,8 +122,8 @@ describe('api command wrappers', () => {
   })
 
   it('copyDiagnostics -> copy_diagnostics', async () => {
-    await api.copyDiagnostics()
-    expect(mockInvoke).toHaveBeenCalledWith('copy_diagnostics')
+    await api.copyDiagnostics('ru')
+    expect(mockInvoke).toHaveBeenCalledWith('copy_diagnostics', { uiLocale: 'ru' })
   })
 
   it('checkForUpdate and installUpdate invoke the serialized backend operations', async () => {

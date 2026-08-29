@@ -2,10 +2,33 @@ import { get } from 'svelte/store'
 import { describe, expect, it, vi } from 'vitest'
 
 import * as api from '../api'
-import { MAX_VISIBLE, createNoticeStore } from '../notices'
+import { createTranslator } from '../i18n'
+import { MAX_VISIBLE, createNoticeStore, noticeDisplayMessage } from '../notices'
 import type { NoticePayload } from '../types'
 
 describe('notice store', () => {
+  it('translates stable codes while preserving a raw cause as separate detail', () => {
+    const payload: NoticePayload = {
+      kind: 'error',
+      message: 'failed to start transcription: native decoder exploded',
+      code: 'transcription_start_failed',
+      detail: 'native decoder exploded',
+    }
+
+    expect(noticeDisplayMessage(payload, createTranslator('en'))).toBe(
+      'Could not start transcription.',
+    )
+    expect(noticeDisplayMessage(payload, createTranslator('ru'))).toBe(
+      'Не удалось запустить распознавание речи.',
+    )
+    expect(payload.detail).toBe('native decoder exploded')
+  })
+
+  it('keeps unknown provider errors raw instead of pretending they are translation keys', () => {
+    const payload: NoticePayload = { kind: 'error', message: 'provider returned HTTP 429' }
+    expect(noticeDisplayMessage(payload, createTranslator('ru'))).toBe('provider returned HTTP 429')
+  })
+
   it('keeps a notice that arrives', () => {
     const store = createNoticeStore()
     store.push({ kind: 'info', message: 'live preview unavailable' })

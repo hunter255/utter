@@ -23,6 +23,7 @@ struct DiagnosticReport {
     app_version: &'static str,
     os: &'static str,
     arch: &'static str,
+    ui_locale: &'static str,
     whisper_metal_compiled: bool,
     profiles: Vec<ProfileSummary>,
     permissions: PermissionSummary,
@@ -35,6 +36,14 @@ struct ProfileSummary {
     engine: &'static str,
     model: Option<String>,
     preview_model: Option<String>,
+}
+
+struct DiagnosticEnvironment<'a> {
+    app_version: &'static str,
+    os: &'static str,
+    arch: &'static str,
+    whisper_metal_compiled: bool,
+    ui_locale: &'a str,
 }
 
 #[derive(Serialize)]
@@ -81,7 +90,7 @@ impl From<PermissionReport> for PermissionSummary {
     }
 }
 
-pub(crate) fn diagnostic_report(settings: &Settings) -> Result<String, String> {
+pub(crate) fn diagnostic_report(settings: &Settings, ui_locale: &str) -> Result<String, String> {
     let recent_logs = logs_dir()
         .map(|dir| read_recent_logs(&dir, LOG_FILES, REPORT_LOG_LINES))
         .unwrap_or_default();
@@ -89,10 +98,13 @@ pub(crate) fn diagnostic_report(settings: &Settings) -> Result<String, String> {
         settings,
         crate::permissions::report(),
         recent_logs,
-        env!("CARGO_PKG_VERSION"),
-        std::env::consts::OS,
-        std::env::consts::ARCH,
-        cfg!(all(target_os = "macos", feature = "whisper-metal")),
+        DiagnosticEnvironment {
+            app_version: env!("CARGO_PKG_VERSION"),
+            os: std::env::consts::OS,
+            arch: std::env::consts::ARCH,
+            whisper_metal_compiled: cfg!(all(target_os = "macos", feature = "whisper-metal")),
+            ui_locale,
+        },
     );
     serde_json::to_string_pretty(&report).map_err(|error| error.to_string())
 }
@@ -101,16 +113,18 @@ fn build_report(
     settings: &Settings,
     permissions: PermissionReport,
     recent_logs: Vec<String>,
-    app_version: &'static str,
-    os: &'static str,
-    arch: &'static str,
-    whisper_metal_compiled: bool,
+    environment: DiagnosticEnvironment<'_>,
 ) -> DiagnosticReport {
     DiagnosticReport {
-        app_version,
-        os,
-        arch,
-        whisper_metal_compiled,
+        app_version: environment.app_version,
+        os: environment.os,
+        arch: environment.arch,
+        ui_locale: if environment.ui_locale.eq_ignore_ascii_case("ru") {
+            "ru"
+        } else {
+            "en"
+        },
+        whisper_metal_compiled: environment.whisper_metal_compiled,
         profiles: settings
             .profiles
             .iter()
@@ -212,14 +226,18 @@ mod tests {
             &settings,
             permissions,
             vec!["safe line".to_string()],
-            "1.2.3",
-            "macos",
-            "aarch64",
-            true,
+            DiagnosticEnvironment {
+                app_version: "1.2.3",
+                os: "macos",
+                arch: "aarch64",
+                whisper_metal_compiled: true,
+                ui_locale: "ru",
+            },
         );
         let json = serde_json::to_string(&report).unwrap();
 
         assert!(json.contains("parakeet-tdt-110m-en"));
+        assert!(json.contains("\"ui_locale\":\"ru\""));
         for forbidden in [
             "Andrey private",
             "private prompt",

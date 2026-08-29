@@ -103,8 +103,8 @@ export function openLogs(): Promise<void> {
 }
 
 /** Builds the safe report; the caller writes the returned text to clipboard. */
-export function copyDiagnostics(): Promise<string> {
-  return invoke('copy_diagnostics')
+export function copyDiagnostics(uiLocale: 'en' | 'ru'): Promise<string> {
+  return invoke('copy_diagnostics', { uiLocale })
 }
 
 export function checkForUpdate(): Promise<UpdateCheck> {

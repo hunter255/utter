@@ -23,7 +23,7 @@ function model(id: string, engine: string, role: 'final' | 'preview', status: Mo
     supported_languages: engine === 'sherpa' ? ['ru'] : ['*'],
     role,
     performance_class: 'fast',
-    recommendation_tags: [],
+    recommendation_codes: [],
   }
 }
 

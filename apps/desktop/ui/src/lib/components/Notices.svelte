@@ -1,7 +1,7 @@
 <script lang="ts">
   // Renders whatever is currently in `noticeStore` (see `lib/notices.ts` for
   // why this window is the notice's second stop, not its first).
-  import { noticeStore } from '../notices'
+  import { noticeDisplayMessage, noticeStore } from '../notices'
   import { t, type MessageKey } from '../i18n'
 
   const KIND_LABEL: Record<'info' | 'warning' | 'error', MessageKey> = {
@@ -22,7 +22,13 @@
               <span class="count">×{notice.count}</span>
             {/if}
           </div>
-          <p class="message">{notice.message}</p>
+          <p class="message">{noticeDisplayMessage(notice, $t)}</p>
+          {#if notice.detail}
+            <details>
+              <summary>{$t('notice.technicalDetails')}</summary>
+              <p class="detail">{notice.detail}</p>
+            </details>
+          {/if}
         </div>
         <button
           type="button"
@@ -90,6 +96,26 @@
 
   .count {
     opacity: 0.75;
+  }
+
+  .message {
+    margin: 0;
+  }
+
+  details {
+    margin-top: var(--space-1);
+    opacity: 0.82;
+  }
+
+  summary {
+    cursor: pointer;
+  }
+
+  .detail {
+    margin: var(--space-1) 0 0;
+    overflow-wrap: anywhere;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
   }
 
   .dismiss {

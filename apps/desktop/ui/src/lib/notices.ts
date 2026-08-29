@@ -19,16 +19,58 @@ import { writable, type Readable } from 'svelte/store'
 import type { UnlistenFn } from '@tauri-apps/api/event'
 
 import * as api from './api'
-import type { NoticeKind, NoticePayload } from './types'
+import { translate, type MessageKey, type Translator } from './i18n'
+import type { NoticeCode, NoticePayload } from './types'
 
 /** A notice on screen: the payload, plus what the list needs to track it. */
-export interface Notice {
+export interface Notice extends NoticePayload {
   id: number
-  kind: NoticeKind
-  message: string
   /** How many times this same message has arrived in a row (`1` for the
    * first). Repeats collapse into the one entry rather than stacking. */
   count: number
+}
+
+const NOTICE_MESSAGE_KEYS: Record<NoticeCode, MessageKey> = {
+  dictation_engine_not_running: 'notice.message.dictationEngineNotRunning',
+  nothing_heard: 'notice.message.nothingHeard',
+  refinement_unavailable: 'notice.message.refinementUnavailable',
+  automatic_paste_unavailable: 'notice.message.automaticPasteUnavailable',
+  no_language_profile: 'notice.message.noLanguageProfile',
+  audio_input_unavailable: 'notice.message.audioInputUnavailable',
+  audio_capture_failed: 'notice.message.audioCaptureFailed',
+  transcription_start_failed: 'notice.message.transcriptionStartFailed',
+  live_preview_unavailable: 'notice.message.livePreviewUnavailable',
+  speech_engine_failed: 'notice.message.speechEngineFailed',
+  speech_engine_flush_failed: 'notice.message.speechEngineFlushFailed',
+  history_save_failed: 'notice.message.historySaveFailed',
+  model_download_fallback: 'notice.message.modelDownloadFallback',
+  model_activation_deferred: 'notice.message.modelActivationDeferred',
+  dictation_setup_unavailable: 'notice.message.dictationSetupUnavailable',
+  hotkey_unavailable: 'notice.message.hotkeyUnavailable',
+  live_preview_limited: 'notice.message.livePreviewLimited',
+  refinement_api_key_optional: 'notice.message.refinementApiKeyOptional',
+  refinement_setup_unavailable: 'notice.message.refinementSetupUnavailable',
+  autostart_sync_failed: 'notice.message.autostartSyncFailed',
+  settings_migration_failed: 'notice.message.settingsMigrationFailed',
+}
+
+/** Translates only a stable code. Unknown OS/provider text remains readable
+ * exactly as the backend supplied it. */
+export function noticeDisplayMessage(
+  notice: NoticePayload,
+  translator: Translator = translate,
+): string {
+  return notice.code
+    ? translator(NOTICE_MESSAGE_KEYS[notice.code], notice.args ?? {})
+    : notice.message
+}
+
+function sameNotice(a: Notice, b: NoticePayload): boolean {
+  return a.kind === b.kind
+    && a.message === b.message
+    && a.code === b.code
+    && a.detail === b.detail
+    && JSON.stringify(a.args ?? {}) === JSON.stringify(b.args ?? {})
 }
 
 /**
@@ -60,7 +102,7 @@ export function createNoticeStore(backend: typeof api = api): NoticeStore {
       const newest = current[current.length - 1]
       // A runtime that keeps reporting the same failure is reporting one
       // problem, not a hundred: count it, don't repeat it.
-      if (newest && newest.kind === payload.kind && newest.message === payload.message) {
+      if (newest && sameNotice(newest, payload)) {
         const collapsed = { ...newest, count: newest.count + 1 }
         return [...current.slice(0, -1), collapsed]
       }

@@ -18,7 +18,7 @@ function model(
   engine: string,
   installed: boolean,
   capabilities: Partial<
-    Pick<ModelInfo, 'role' | 'supported_languages' | 'performance_class' | 'recommendation_tags'>
+    Pick<ModelInfo, 'role' | 'supported_languages' | 'performance_class' | 'recommendation_codes'>
   > = {},
 ): ModelInfo {
   return {
@@ -31,7 +31,7 @@ function model(
     role: engine === 'sherpa-streaming' ? 'preview' : 'final',
     supported_languages: ['*'],
     performance_class: 'fast',
-    recommendation_tags: ['Fixture fit'],
+    recommendation_codes: ['cpu_only'],
     ...capabilities,
   }
 }
@@ -46,12 +46,12 @@ const CATALOG: ModelInfo[] = [
   model('t-one-ru', 'sherpa-streaming', true, {
     supported_languages: ['ru'],
     performance_class: 'balanced',
-    recommendation_tags: ['Accuracy-focused Russian preview', 'Live preview only'],
+    recommendation_codes: ['accuracy_russian_preview', 'live_preview_only'],
   }),
   model('nemotron-3.5-multilingual', 'sherpa-streaming', false, {
     supported_languages: ['*'],
     performance_class: 'heavy',
-    recommendation_tags: ['Russian + English code-switching', 'Automatic language detection'],
+    recommendation_codes: ['russian_english_code_switching', 'automatic_language_detection'],
   }),
   model('zipformer-en-small', 'sherpa-streaming', false, { supported_languages: ['en'] }),
 ]
@@ -84,12 +84,12 @@ describe('transcriptionModelOptions', () => {
     expect(transcriptionModelOptions(CATALOG)).toEqual([
       {
         value: 'small',
-        label: 'Whisper — small label — Multilingual · Fast · Fixture fit — 1 MB — installed',
+        label: 'Whisper — small label — Multilingual · Fast · CPU only — 1 MB — installed',
       },
       {
         value: 'parakeet-tdt-110m-en',
         label:
-          'Sherpa-onnx — parakeet-tdt-110m-en label — English · Fast · Fixture fit — 1 MB — installed',
+          'Sherpa-onnx — parakeet-tdt-110m-en label — English · Fast · CPU only — 1 MB — installed',
       },
     ])
   })
@@ -118,7 +118,7 @@ describe('previewModelOptions', () => {
       { value: '', label: 'Off' },
       {
         value: 'zipformer-ru-small',
-        label: 'zipformer-ru-small label — Russian · Fast · Fixture fit (installed)',
+        label: 'zipformer-ru-small label — Russian · Fast · CPU only (installed)',
       },
       {
         value: 't-one-ru',
@@ -132,7 +132,7 @@ describe('previewModelOptions', () => {
       },
       {
         value: 'zipformer-en-small',
-        label: 'zipformer-en-small label — English · Fast · Fixture fit (not downloaded)',
+        label: 'zipformer-en-small label — English · Fast · CPU only (not downloaded)',
       },
     ])
   })
@@ -141,10 +141,10 @@ describe('previewModelOptions', () => {
     const labels = previewModelOptions(CATALOG).map((o) => o.label)
 
     expect(labels).toContain(
-      'zipformer-en-small label — English · Fast · Fixture fit (not downloaded)',
+      'zipformer-en-small label — English · Fast · CPU only (not downloaded)',
     )
     expect(labels).toContain(
-      'zipformer-ru-small label — Russian · Fast · Fixture fit (installed)',
+      'zipformer-ru-small label — Russian · Fast · CPU only (installed)',
     )
   })
 
@@ -165,11 +165,11 @@ describe('previewModelOptions', () => {
 describe('model language compatibility', () => {
   const russian = model('giga', 'sherpa', true, {
     supported_languages: ['ru'],
-    recommendation_tags: ['Recommended for Russian'],
+    recommendation_codes: ['recommended_russian'],
   })
   const english = model('parakeet', 'sherpa', true, {
     supported_languages: ['en'],
-    recommendation_tags: ['Recommended for English'],
+    recommendation_codes: ['recommended_english'],
   })
   const multilingual = model('whisper', 'whisper', true)
 

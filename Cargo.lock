@@ -5768,6 +5768,7 @@ dependencies = [
  "accessibility-sys",
  "anyhow",
  "core-foundation",
+ "core-foundation-sys",
  "core-graphics-types",
  "crossbeam-channel",
  "gtk",
